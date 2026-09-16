@@ -550,7 +550,7 @@ public:
         return true;
     }
 
-    bool get_and_append(std::string_view key, std::string& out) {
+    bool get_and_append(std::string_view key, std::string& out, int protocol = 2) {
         size_t idx = shard_index(key);
         auto& shard = shards_[idx];
         uint64_t now = current_time_ms();
@@ -560,7 +560,7 @@ public:
             std::shared_lock<std::shared_mutex> lock(shard.mutex);
             auto it = shard.data.find(k);
             if (it == shard.data.end()) {
-                Resp::append_null_bulk_string(out);
+                Resp::append_null_bulk_string(out, protocol);
                 return true;
             }
             if (it->second.expire_at == 0 || it->second.expire_at > now) {
@@ -583,7 +583,7 @@ public:
                 if (!shard.keys_with_ttl.empty()) {
                     shard.keys_with_ttl.erase(k);
                 }
-                Resp::append_null_bulk_string(out);
+                Resp::append_null_bulk_string(out, protocol);
                 return true;
             }
             if (!it->second.is_string()) {
@@ -594,7 +594,7 @@ public:
             Resp::append_bulk_string(out, it->second.as_string());
             return true;
         }
-        Resp::append_null_bulk_string(out);
+        Resp::append_null_bulk_string(out, protocol);
         return true;
     }
 
@@ -636,7 +636,7 @@ public:
         return {GetStatus::NotFound, ""};
     }
 
-    void mget_and_append(const std::vector<std::string_view>& keys, std::string& out) {
+    void mget_and_append(const std::vector<std::string_view>& keys, std::string& out, int protocol = 2) {
         uint64_t now = current_time_ms();
         uint64_t now_sec = current_lru_clock();
         std::vector<std::string> expired_keys;
@@ -662,12 +662,12 @@ public:
             std::string k(key);
             auto it = shard.data.find(k);
             if (it == shard.data.end()) {
-                Resp::append_null_bulk_string(out);
+                Resp::append_null_bulk_string(out, protocol);
             } else if (it->second.expire_at != 0 && it->second.expire_at <= now) {
-                Resp::append_null_bulk_string(out);
+                Resp::append_null_bulk_string(out, protocol);
                 expired_keys.push_back(std::move(k));
             } else if (!it->second.is_string()) {
-                Resp::append_null_bulk_string(out);
+                Resp::append_null_bulk_string(out, protocol);
             } else {
                 it->second.touch(now_sec);
                 Resp::append_bulk_string(out, it->second.as_string());
@@ -892,7 +892,7 @@ public:
         return rpush(std::string_view(key), values.begin(), values.end(), new_len);
     }
 
-    bool lpop_one(std::string_view key, std::string& out) {
+    bool lpop_one(std::string_view key, std::string& out, int protocol = 2) {
         size_t idx = shard_index(key);
         auto& shard = shards_[idx];
         std::unique_lock<std::shared_mutex> lock(shard.mutex);
@@ -900,7 +900,7 @@ public:
         std::string k(key);
         auto it = shard.data.find(k);
         if (it == shard.data.end()) {
-            Resp::append_null_bulk_string(out);
+            Resp::append_null_bulk_string(out, protocol);
             return true;
         }
         if (it->second.expire_at != 0 && it->second.expire_at <= now) {
@@ -909,7 +909,7 @@ public:
             if (!shard.keys_with_ttl.empty()) {
                 shard.keys_with_ttl.erase(k);
             }
-            Resp::append_null_bulk_string(out);
+            Resp::append_null_bulk_string(out, protocol);
             return true;
         }
         if (!it->second.is_list()) {
@@ -923,7 +923,7 @@ public:
             if (!shard.keys_with_ttl.empty()) {
                 shard.keys_with_ttl.erase(k);
             }
-            Resp::append_null_bulk_string(out);
+            Resp::append_null_bulk_string(out, protocol);
             return true;
         }
         Resp::append_bulk_string(out, deque.front());
@@ -942,7 +942,7 @@ public:
         return true;
     }
 
-    bool rpop_one(std::string_view key, std::string& out) {
+    bool rpop_one(std::string_view key, std::string& out, int protocol = 2) {
         size_t idx = shard_index(key);
         auto& shard = shards_[idx];
         std::unique_lock<std::shared_mutex> lock(shard.mutex);
@@ -950,7 +950,7 @@ public:
         std::string k(key);
         auto it = shard.data.find(k);
         if (it == shard.data.end()) {
-            Resp::append_null_bulk_string(out);
+            Resp::append_null_bulk_string(out, protocol);
             return true;
         }
         if (it->second.expire_at != 0 && it->second.expire_at <= now) {
@@ -959,7 +959,7 @@ public:
             if (!shard.keys_with_ttl.empty()) {
                 shard.keys_with_ttl.erase(k);
             }
-            Resp::append_null_bulk_string(out);
+            Resp::append_null_bulk_string(out, protocol);
             return true;
         }
         if (!it->second.is_list()) {
@@ -973,7 +973,7 @@ public:
             if (!shard.keys_with_ttl.empty()) {
                 shard.keys_with_ttl.erase(k);
             }
-            Resp::append_null_bulk_string(out);
+            Resp::append_null_bulk_string(out, protocol);
             return true;
         }
         Resp::append_bulk_string(out, deque.back());

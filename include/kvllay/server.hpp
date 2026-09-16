@@ -34,6 +34,7 @@
     #define IS_VALID_SOCKET(s) ((s) != INVALID_SOCKET)
     #define CLOSE_SOCKET(s) closesocket(s)
 #else
+    #include <poll.h>
     #include <signal.h>
     #include <sys/types.h>
     #include <sys/socket.h>
@@ -61,10 +62,22 @@ inline void handler(int) noexcept {
     requested = 1;
 }
 
+#ifdef _WIN32
+inline BOOL WINAPI console_ctrl_handler(DWORD ctrl_type) {
+    if (ctrl_type == CTRL_C_EVENT || ctrl_type == CTRL_BREAK_EVENT ||
+        ctrl_type == CTRL_CLOSE_EVENT || ctrl_type == CTRL_SHUTDOWN_EVENT) {
+        requested = 1;
+        return TRUE;
+    }
+    return FALSE;
+}
+#endif
+
 inline void install() noexcept {
     requested = 0;
 
 #ifdef _WIN32
+    SetConsoleCtrlHandler(console_ctrl_handler, TRUE);
     std::signal(SIGINT, handler);
     #ifdef SIGTERM
     std::signal(SIGTERM, handler);
@@ -224,45 +237,72 @@ public:
                 break;
             }
 
-            sockaddr_in client_addr{};
-            socklen_t client_len = sizeof(client_addr);
-            socket_t client_socket = accept(server_socket_, (sockaddr*)&client_addr, &client_len);
+#ifdef _WIN32
+            WSAPOLLFD pfd{};
+            pfd.fd = server_socket_;
+            pfd.events = POLLIN;
+            int poll_ret = WSAPoll(&pfd, 1, 100);
+#else
+            struct pollfd pfd{};
+            pfd.fd = server_socket_;
+            pfd.events = POLLIN;
+            int poll_ret = poll(&pfd, 1, 100);
+#endif
 
-            if (!IS_VALID_SOCKET(client_socket)) {
+            if (poll_ret < 0) {
                 int err = SOCKET_ERRNO;
                 if (err == ERR_INTR) {
                     continue;
                 }
-
-                if (err == ERR_AGAIN
-#ifndef _WIN32
-                    || err == EWOULDBLOCK
-#endif
-                ) {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(20));
-                    continue;
-                }
-
                 if (running_) {
-                    std::cerr << "[kvllay] accept() failed, stopping server" << std::endl;
+                    std::cerr << "[kvllay] poll() failed on listening socket" << std::endl;
                 }
                 break;
             }
 
-            int nodelay = 1;
+            if (poll_ret == 0 || !(pfd.revents & POLLIN)) {
+                continue;
+            }
+
+            while (running_) {
+                sockaddr_in client_addr{};
+                socklen_t client_len = sizeof(client_addr);
+                socket_t client_socket = accept(server_socket_, (sockaddr*)&client_addr, &client_len);
+
+                if (!IS_VALID_SOCKET(client_socket)) {
+                    int err = SOCKET_ERRNO;
+                    if (err == ERR_INTR) {
+                        continue;
+                    }
+                    if (err == ERR_AGAIN
+#ifndef _WIN32
+                        || err == EWOULDBLOCK
+#endif
+                    ) {
+                        break;
+                    }
+
+                    if (running_) {
+                        std::cerr << "[kvllay] accept() failed" << std::endl;
+                    }
+                    break;
+                }
+
+                int nodelay = 1;
 #ifdef _WIN32
-            setsockopt(client_socket, IPPROTO_TCP, TCP_NODELAY, (const char*)&nodelay, sizeof(nodelay));
-            int bufsize = 262144;
-            setsockopt(client_socket, SOL_SOCKET, SO_RCVBUF, (const char*)&bufsize, sizeof(bufsize));
-            setsockopt(client_socket, SOL_SOCKET, SO_SNDBUF, (const char*)&bufsize, sizeof(bufsize));
+                setsockopt(client_socket, IPPROTO_TCP, TCP_NODELAY, (const char*)&nodelay, sizeof(nodelay));
+                int bufsize = 262144;
+                setsockopt(client_socket, SOL_SOCKET, SO_RCVBUF, (const char*)&bufsize, sizeof(bufsize));
+                setsockopt(client_socket, SOL_SOCKET, SO_SNDBUF, (const char*)&bufsize, sizeof(bufsize));
 #else
-            setsockopt(client_socket, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
-            int bufsize = 262144;
-            setsockopt(client_socket, SOL_SOCKET, SO_RCVBUF, &bufsize, sizeof(bufsize));
-            setsockopt(client_socket, SOL_SOCKET, SO_SNDBUF, &bufsize, sizeof(bufsize));
+                setsockopt(client_socket, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
+                int bufsize = 262144;
+                setsockopt(client_socket, SOL_SOCKET, SO_RCVBUF, &bufsize, sizeof(bufsize));
+                setsockopt(client_socket, SOL_SOCKET, SO_SNDBUF, &bufsize, sizeof(bufsize));
 #endif
 
-            worker_pool_.dispatch_connection(client_socket, config_.password.empty());
+                worker_pool_.dispatch_connection(client_socket, config_.password.empty());
+            }
         }
 
         // stop() is idempotent, so this also covers an external stop() call

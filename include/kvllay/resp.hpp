@@ -30,12 +30,24 @@ public:
         out.append("+PONG\r\n", 7);
     }
 
-    static inline void append_null_bulk_string(std::string& out) {
-        out.append("$-1\r\n", 5);
+    static inline void append_null(std::string& out, int protocol = 2) {
+        if (protocol == 3) {
+            out.append("_\r\n", 3);
+        } else {
+            out.append("$-1\r\n", 5);
+        }
     }
 
-    static inline void append_null_array(std::string& out) {
-        out.append("*-1\r\n", 5);
+    static inline void append_null_bulk_string(std::string& out, int protocol = 2) {
+        append_null(out, protocol);
+    }
+
+    static inline void append_null_array(std::string& out, int protocol = 2) {
+        if (protocol == 3) {
+            out.append("_\r\n", 3);
+        } else {
+            out.append("*-1\r\n", 5);
+        }
     }
 
     static inline void append_empty_array(std::string& out) {

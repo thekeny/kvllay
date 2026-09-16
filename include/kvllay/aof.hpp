@@ -121,7 +121,7 @@ public:
 
         bool opened = false;
         {
-            std::lock_guard<std::mutex> lock(buffer_mutex_);
+            std::lock_guard<std::mutex> lock(file_mutex_);
             file_handle_ = fopen(aof_path_.c_str(), "ab");
             opened = file_handle_ != nullptr;
         }
@@ -137,7 +137,9 @@ public:
 
     void stop() {
         std::lock_guard<std::mutex> lifecycle_lock(lifecycle_mutex_);
-        running_.store(false);
+        if (!running_.exchange(false)) {
+            return;
+        }
 
         {
             std::lock_guard<std::mutex> lock(buffer_mutex_);
@@ -160,7 +162,7 @@ public:
         flush_sync();
 
         {
-            std::lock_guard<std::mutex> lock(buffer_mutex_);
+            std::lock_guard<std::mutex> file_lock(file_mutex_);
             if (file_handle_) {
                 sync_file_locked();
                 fclose(file_handle_);
@@ -308,37 +310,39 @@ private:
                 if (!active_buffer_.empty()) {
                     flushing_buffer_.swap(active_buffer_);
                 }
+            }
 
-                // Keep the mutex for the entire FILE* operation.  A rewrite
-                // closes and replaces file_handle_ while holding this same
-                // mutex, so it cannot invalidate the pointer mid-write or
-                // race with flushing_buffer_.
-                if (!flushing_buffer_.empty() && file_handle_) {
-                    fwrite(flushing_buffer_.data(), 1, flushing_buffer_.size(), file_handle_);
-                    fflush(file_handle_);
-                    flushing_buffer_.clear();
-                }
+            // Write flushing_buffer_ and perform periodic fsync under file_mutex_ without
+            // holding buffer_mutex_. This ensures client mutating commands are never stalled by disk I/O!
+            std::lock_guard<std::mutex> file_lock(file_mutex_);
+            if (!flushing_buffer_.empty() && file_handle_) {
+                fwrite(flushing_buffer_.data(), 1, flushing_buffer_.size(), file_handle_);
+                fflush(file_handle_);
+                flushing_buffer_.clear();
+            }
 
-                if (fsync_policy_ == FsyncPolicy::EverySec && file_handle_) {
-                    auto now = std::chrono::steady_clock::now();
-                    if (now - last_fsync_time_ >= std::chrono::seconds(1)) {
-                        sync_file_locked();
-                        last_fsync_time_ = now;
-                    }
+            if (fsync_policy_ == FsyncPolicy::EverySec && file_handle_) {
+                auto now = std::chrono::steady_clock::now();
+                if (now - last_fsync_time_ >= std::chrono::seconds(1)) {
+                    sync_file_locked();
+                    last_fsync_time_ = now;
                 }
             }
         }
     }
 
     void flush_sync() {
-        std::lock_guard<std::mutex> lock(buffer_mutex_);
-        if (!active_buffer_.empty() && file_handle_) {
-            fwrite(active_buffer_.data(), 1, active_buffer_.size(), file_handle_);
-            active_buffer_.clear();
-        }
-        if (!flushing_buffer_.empty() && file_handle_) {
-            fwrite(flushing_buffer_.data(), 1, flushing_buffer_.size(), file_handle_);
-            flushing_buffer_.clear();
+        std::lock_guard<std::mutex> file_lock(file_mutex_);
+        {
+            std::lock_guard<std::mutex> lock(buffer_mutex_);
+            if (!active_buffer_.empty() && file_handle_) {
+                fwrite(active_buffer_.data(), 1, active_buffer_.size(), file_handle_);
+                active_buffer_.clear();
+            }
+            if (!flushing_buffer_.empty() && file_handle_) {
+                fwrite(flushing_buffer_.data(), 1, flushing_buffer_.size(), file_handle_);
+                flushing_buffer_.clear();
+            }
         }
         if (file_handle_) {
             fflush(file_handle_);
@@ -348,8 +352,8 @@ private:
         }
     }
 
-    // Must be called while buffer_mutex_ is held.  Keeping the FILE* lifetime
-    // and every stdio operation under the same mutex prevents rewrite from
+    // Must be called while file_mutex_ is held. Keeping the FILE* lifetime
+    // and every stdio operation under file_mutex_ prevents rewrite from
     // closing the stream while another thread is using it.
     void sync_file_locked() {
         if (!file_handle_) return;
@@ -424,15 +428,18 @@ private:
         fflush(tmp_fp);
 
         {
-            std::lock_guard<std::mutex> lock(buffer_mutex_);
+            std::lock_guard<std::mutex> file_lock(file_mutex_);
 
-            if (!flushing_buffer_.empty()) {
-                fwrite(flushing_buffer_.data(), 1, flushing_buffer_.size(), tmp_fp);
-                flushing_buffer_.clear();
-            }
-            if (!active_buffer_.empty()) {
-                fwrite(active_buffer_.data(), 1, active_buffer_.size(), tmp_fp);
-                active_buffer_.clear();
+            {
+                std::lock_guard<std::mutex> lock(buffer_mutex_);
+                if (!flushing_buffer_.empty()) {
+                    fwrite(flushing_buffer_.data(), 1, flushing_buffer_.size(), tmp_fp);
+                    flushing_buffer_.clear();
+                }
+                if (!active_buffer_.empty()) {
+                    fwrite(active_buffer_.data(), 1, active_buffer_.size(), tmp_fp);
+                    active_buffer_.clear();
+                }
             }
 
             fflush(tmp_fp);
@@ -603,6 +610,7 @@ private:
     bool enabled_;
     FsyncPolicy fsync_policy_;
     FILE* file_handle_;
+    std::mutex file_mutex_;
 
     std::mutex lifecycle_mutex_;
 

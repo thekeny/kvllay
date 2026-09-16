@@ -105,12 +105,11 @@ public:
             char c1 = std::toupper(static_cast<unsigned char>(cmd[1]));
             char c2 = std::toupper(static_cast<unsigned char>(cmd[2]));
             if (c0 == 'G' && c1 == 'E' && c2 == 'T') {
-                handle_get_sv(args, out);
+                handle_get_sv(args, out, client.protocol);
             } else if (c0 == 'S' && c1 == 'E' && c2 == 'T') {
-                is_mutating = handle_set_sv(args, out);
+                is_mutating = handle_set_sv(args, out, client.protocol);
             } else if (c0 == 'D' && c1 == 'E' && c2 == 'L') {
-                is_mutating = true;
-                handle_del_sv(args, out);
+                is_mutating = handle_del_sv(args, out);
             } else if (c0 == 'T' && c1 == 'T' && c2 == 'L') {
                 handle_ttl_sv(args, out);
             } else {
@@ -133,7 +132,7 @@ public:
                     handle_incr_sv(args, out);
                 }
             } else if (c0 == 'M' && c1 == 'G' && c2 == 'E' && c3 == 'T') {
-                handle_mget_sv(args, out);
+                handle_mget_sv(args, out, client.protocol);
             } else if (c0 == 'M' && c1 == 'S' && c2 == 'E' && c3 == 'T') {
                 if (!store_.check_memory_and_evict()) {
                     Resp::append_error(out, "OOM command not allowed when used memory > 'maxmemory'.");
@@ -150,10 +149,10 @@ public:
                 }
             } else if (c0 == 'L' && c1 == 'P' && c2 == 'O' && c3 == 'P') {
                 is_mutating = true;
-                handle_lpop_sv(args, out);
+                handle_lpop_sv(args, out, client.protocol);
             } else if (c0 == 'R' && c1 == 'P' && c2 == 'O' && c3 == 'P') {
                 is_mutating = true;
-                handle_rpop_sv(args, out);
+                handle_rpop_sv(args, out, client.protocol);
             } else if (c0 == 'L' && c1 == 'L' && c2 == 'E' && c3 == 'N') {
                 handle_llen_sv(args, out);
             } else if (c0 == 'T' && c1 == 'Y' && c2 == 'P' && c3 == 'E') {
@@ -219,11 +218,11 @@ public:
                 }
             } else if (iequals(cmd, "EXPIRE")) {
                 is_mutating = true;
-                handle_expire_sv(args, out, aof_args);
+                handle_expire_sv(args, out, aof_args, is_mutating);
             } else if (iequals(cmd, "LRANGE")) {
                 handle_lrange_sv(args, out);
             } else if (iequals(cmd, "LINDEX")) {
-                handle_lindex_sv(args, out);
+                handle_lindex_sv(args, out, client.protocol);
             } else if (iequals(cmd, "DBSIZE")) {
                 handle_dbsize_sv(args, out);
             } else if (iequals(cmd, "CONFIG")) {
@@ -244,10 +243,10 @@ public:
                 handle_command_sv(args, out);
             } else if (iequals(cmd, "PEXPIRE")) {
                 is_mutating = true;
-                handle_pexpire_sv(args, out, aof_args);
+                handle_pexpire_sv(args, out, aof_args, is_mutating);
             } else if (iequals(cmd, "PERSIST")) {
                 is_mutating = true;
-                handle_persist_sv(args, out);
+                handle_persist_sv(args, out, is_mutating);
             } else if (iequals(cmd, "FLUSHDB")) {
                 is_mutating = true;
                 handle_flushdb_sv(args, out);
@@ -368,7 +367,7 @@ private:
                 Resp::append_error(out, "wrong number of arguments for 'client|getname' command");
                 return;
             }
-            if (!client.name_set) Resp::append_null_bulk_string(out);
+            if (!client.name_set) Resp::append_null_bulk_string(out, client.protocol);
             else Resp::append_bulk_string(out, client.name);
             return;
         }
@@ -616,7 +615,7 @@ private:
         return true;
     }
 
-    bool handle_set_sv(const std::vector<std::string_view>& args, std::string& out) {
+    bool handle_set_sv(const std::vector<std::string_view>& args, std::string& out, int protocol = 2) {
         if (args.size() < 3) {
             Resp::append_error(out, "wrong number of arguments for 'set' command");
             return false;
@@ -634,32 +633,35 @@ private:
         auto status = store_.set_with_options(args[1], args[2], options.ttl_ms,
                                               options.keep_ttl, options.nx, options.xx);
         if (status == Store::SetStatus::NotApplied) {
-            Resp::append_null_bulk_string(out);
+            Resp::append_null_bulk_string(out, protocol);
             return false;
         }
         Resp::append_ok(out);
         return true;
     }
 
-    void handle_get_sv(const std::vector<std::string_view>& args, std::string& out) {
+    void handle_get_sv(const std::vector<std::string_view>& args, std::string& out, int protocol = 2) {
         if (args.size() != 2) {
             Resp::append_error(out, "wrong number of arguments for 'get' command");
             return;
         }
-        store_.get_and_append(args[1], out);
+        store_.get_and_append(args[1], out, protocol);
     }
 
-    void handle_del_sv(const std::vector<std::string_view>& args, std::string& out) {
+    bool handle_del_sv(const std::vector<std::string_view>& args, std::string& out) {
         if (args.size() < 2) {
             Resp::append_error(out, "wrong number of arguments for 'del' command");
-            return;
+            return false;
         }
+        size_t count = 0;
         if (args.size() == 2) {
-            Resp::append_integer(out, store_.del_one(args[1]));
-            return;
+            count = store_.del_one(args[1]);
+        } else {
+            std::vector<std::string_view> keys(args.begin() + 1, args.end());
+            count = store_.del(keys);
         }
-        std::vector<std::string_view> keys(args.begin() + 1, args.end());
-        Resp::append_integer(out, store_.del(keys));
+        Resp::append_integer(out, count);
+        return count > 0;
     }
 
     void handle_exists_sv(const std::vector<std::string_view>& args, std::string& out) {
@@ -853,41 +855,53 @@ private:
     }
 
     void handle_expire_sv(const std::vector<std::string_view>& args, std::string& out,
-                          std::vector<std::string>& aof_args) {
+                          std::vector<std::string>& aof_args, bool& is_mutating) {
         if (args.size() != 3) {
             Resp::append_error(out, "wrong number of arguments for 'expire' command");
+            is_mutating = false;
             return;
         }
         long long seconds = 0;
         auto [ptr, ec] = std::from_chars(args[2].data(), args[2].data() + args[2].size(), seconds);
         if (ec != std::errc() || ptr != args[2].data() + args[2].size()) {
             Resp::append_error(out, "value is not an integer or out of range");
+            is_mutating = false;
             return;
         }
         uint64_t expire_at = 0;
         uint64_t ttl_ms = seconds > 0 ? static_cast<uint64_t>(seconds) * 1000 : 0;
         int result = store_.expire(std::string(args[1]), ttl_ms, &expire_at);
         Resp::append_integer(out, result);
-        aof_args = {"PEXPIREAT", std::string(args[1]), std::to_string(expire_at)};
+        if (result == 1) {
+            aof_args = {"PEXPIREAT", std::string(args[1]), std::to_string(expire_at)};
+        } else {
+            is_mutating = false;
+        }
     }
 
     void handle_pexpire_sv(const std::vector<std::string_view>& args, std::string& out,
-                           std::vector<std::string>& aof_args) {
+                           std::vector<std::string>& aof_args, bool& is_mutating) {
         if (args.size() != 3) {
             Resp::append_error(out, "wrong number of arguments for 'pexpire' command");
+            is_mutating = false;
             return;
         }
         long long ms = 0;
         auto [ptr, ec] = std::from_chars(args[2].data(), args[2].data() + args[2].size(), ms);
         if (ec != std::errc() || ptr != args[2].data() + args[2].size()) {
             Resp::append_error(out, "value is not an integer or out of range");
+            is_mutating = false;
             return;
         }
         uint64_t expire_at = 0;
         uint64_t ttl_ms = ms > 0 ? static_cast<uint64_t>(ms) : 0;
         int result = store_.expire(std::string(args[1]), ttl_ms, &expire_at);
         Resp::append_integer(out, result);
-        aof_args = {"PEXPIREAT", std::string(args[1]), std::to_string(expire_at)};
+        if (result == 1) {
+            aof_args = {"PEXPIREAT", std::string(args[1]), std::to_string(expire_at)};
+        } else {
+            is_mutating = false;
+        }
     }
 
     void handle_ttl_sv(const std::vector<std::string_view>& args, std::string& out) {
@@ -906,12 +920,17 @@ private:
         Resp::append_integer(out, store_.ttl(std::string(args[1]), true));
     }
 
-    void handle_persist_sv(const std::vector<std::string_view>& args, std::string& out) {
+    void handle_persist_sv(const std::vector<std::string_view>& args, std::string& out, bool& is_mutating) {
         if (args.size() != 2) {
             Resp::append_error(out, "wrong number of arguments for 'persist' command");
+            is_mutating = false;
             return;
         }
-        Resp::append_integer(out, store_.persist(std::string(args[1])));
+        int result = store_.persist(std::string(args[1]));
+        Resp::append_integer(out, result);
+        if (result == 0) {
+            is_mutating = false;
+        }
     }
 
     void handle_setex_sv(const std::vector<std::string_view>& args, std::string& out) {
@@ -997,13 +1016,13 @@ private:
         format_incr_result_sv(status, result, out);
     }
 
-    void handle_mget_sv(const std::vector<std::string_view>& args, std::string& out) {
+    void handle_mget_sv(const std::vector<std::string_view>& args, std::string& out, int protocol = 2) {
         if (args.size() < 2) {
             Resp::append_error(out, "wrong number of arguments for 'mget' command");
             return;
         }
         std::vector<std::string_view> keys(args.begin() + 1, args.end());
-        store_.mget_and_append(keys, out);
+        store_.mget_and_append(keys, out, protocol);
     }
 
     void handle_mset_sv(const std::vector<std::string_view>& args, std::string& out) {
@@ -1033,6 +1052,7 @@ private:
             Resp::append_error(out, "ERR failed to save snapshot");
             return;
         }
+        store_.reset_dirty();
         Resp::append_ok(out);
     }
 
@@ -1113,13 +1133,13 @@ private:
         Resp::append_integer(out, static_cast<long long>(new_len));
     }
 
-    void handle_lpop_sv(const std::vector<std::string_view>& args, std::string& out) {
+    void handle_lpop_sv(const std::vector<std::string_view>& args, std::string& out, int protocol = 2) {
         if (args.size() < 2 || args.size() > 3) {
             Resp::append_error(out, "wrong number of arguments for 'lpop' command");
             return;
         }
         if (args.size() == 2) {
-            store_.lpop_one(args[1], out);
+            store_.lpop_one(args[1], out, protocol);
             return;
         }
 
@@ -1137,7 +1157,7 @@ private:
                 return;
             }
             if (len == 0 && store_.exists_one(args[1]) == 0) {
-                Resp::append_null_array(out);
+                Resp::append_null_array(out, protocol);
                 return;
             }
             Resp::append_empty_array(out);
@@ -1151,7 +1171,7 @@ private:
             return;
         }
         if (status == Store::ListPopStatus::NotFound) {
-            Resp::append_null_array(out);
+            Resp::append_null_array(out, protocol);
             return;
         }
         Resp::append_array_header(out, popped.size());
@@ -1160,13 +1180,13 @@ private:
         }
     }
 
-    void handle_rpop_sv(const std::vector<std::string_view>& args, std::string& out) {
+    void handle_rpop_sv(const std::vector<std::string_view>& args, std::string& out, int protocol = 2) {
         if (args.size() < 2 || args.size() > 3) {
             Resp::append_error(out, "wrong number of arguments for 'rpop' command");
             return;
         }
         if (args.size() == 2) {
-            store_.rpop_one(args[1], out);
+            store_.rpop_one(args[1], out, protocol);
             return;
         }
 
@@ -1184,7 +1204,7 @@ private:
                 return;
             }
             if (len == 0 && store_.exists_one(args[1]) == 0) {
-                Resp::append_null_array(out);
+                Resp::append_null_array(out, protocol);
                 return;
             }
             Resp::append_empty_array(out);
@@ -1198,7 +1218,7 @@ private:
             return;
         }
         if (status == Store::ListPopStatus::NotFound) {
-            Resp::append_null_array(out);
+            Resp::append_null_array(out, protocol);
             return;
         }
         Resp::append_array_header(out, popped.size());
@@ -1247,7 +1267,7 @@ private:
         }
     }
 
-    void handle_lindex_sv(const std::vector<std::string_view>& args, std::string& out) {
+    void handle_lindex_sv(const std::vector<std::string_view>& args, std::string& out, int protocol = 2) {
         if (args.size() != 3) {
             Resp::append_error(out, "wrong number of arguments for 'lindex' command");
             return;
@@ -1265,7 +1285,7 @@ private:
             return;
         }
         if (status == Store::ListRangeStatus::NotFound) {
-            Resp::append_null_bulk_string(out);
+            Resp::append_null_bulk_string(out, protocol);
             return;
         }
         Resp::append_bulk_string(out, elem);
