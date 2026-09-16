@@ -1606,6 +1606,7 @@ public:
             sub_memory(estimate_entry_memory(key, it->second));
             shard.data.erase(it);
             shard.keys_with_ttl.erase(key);
+            dirty_++;
             return 1;
         }
 
