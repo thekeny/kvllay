@@ -114,8 +114,13 @@ public:
             return true;
         }
 
-        file_handle_ = fopen(aof_path_.c_str(), "ab");
-        if (!file_handle_) {
+        bool opened = false;
+        {
+            std::lock_guard<std::mutex> lock(buffer_mutex_);
+            file_handle_ = fopen(aof_path_.c_str(), "ab");
+            opened = file_handle_ != nullptr;
+        }
+        if (!opened) {
             std::cerr << "[kvllay] Failed to open AOF file " << aof_path_ << std::endl;
             return false;
         }
@@ -139,12 +144,24 @@ public:
             writer_thread_.join();
         }
 
+        // A rewrite uses this object and may replace file_handle_.  It must
+        // finish before the manager (and its FILE*) can be destroyed.
+        {
+            std::lock_guard<std::mutex> lock(rewrite_mutex_);
+            if (rewrite_thread_.joinable()) {
+                rewrite_thread_.join();
+            }
+        }
+
         flush_sync();
 
-        if (file_handle_) {
-            sync_file();
-            fclose(file_handle_);
-            file_handle_ = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(buffer_mutex_);
+            if (file_handle_) {
+                sync_file_locked();
+                fclose(file_handle_);
+                file_handle_ = nullptr;
+            }
         }
     }
 
@@ -252,10 +269,25 @@ public:
 
         auto entries = store.get_all_entries();
 
-        std::thread([this, entries = std::move(entries)]() mutable {
-            perform_rewrite(entries);
-            rewrite_in_progress_.store(false);
-        }).detach();
+        {
+            std::lock_guard<std::mutex> lock(rewrite_mutex_);
+            if (!running_) {
+                rewrite_in_progress_.store(false);
+                return false;
+            }
+
+            // A completed rewrite remains joinable until it is collected.
+            // Reap it before starting the next rewrite.
+            if (rewrite_thread_.joinable()) {
+                std::thread previous = std::move(rewrite_thread_);
+                previous.join();
+            }
+
+            rewrite_thread_ = std::thread([this, entries = std::move(entries)]() mutable {
+                perform_rewrite(entries);
+                rewrite_in_progress_.store(false);
+            });
+        }
 
         return true;
     }
@@ -272,19 +304,23 @@ private:
                 if (!active_buffer_.empty()) {
                     flushing_buffer_.swap(active_buffer_);
                 }
-            }
 
-            if (!flushing_buffer_.empty() && file_handle_) {
-                fwrite(flushing_buffer_.data(), 1, flushing_buffer_.size(), file_handle_);
-                fflush(file_handle_);
-                flushing_buffer_.clear();
-            }
+                // Keep the mutex for the entire FILE* operation.  A rewrite
+                // closes and replaces file_handle_ while holding this same
+                // mutex, so it cannot invalidate the pointer mid-write or
+                // race with flushing_buffer_.
+                if (!flushing_buffer_.empty() && file_handle_) {
+                    fwrite(flushing_buffer_.data(), 1, flushing_buffer_.size(), file_handle_);
+                    fflush(file_handle_);
+                    flushing_buffer_.clear();
+                }
 
-            if (fsync_policy_ == FsyncPolicy::EverySec && file_handle_) {
-                auto now = std::chrono::steady_clock::now();
-                if (now - last_fsync_time_ >= std::chrono::seconds(1)) {
-                    sync_file();
-                    last_fsync_time_ = now;
+                if (fsync_policy_ == FsyncPolicy::EverySec && file_handle_) {
+                    auto now = std::chrono::steady_clock::now();
+                    if (now - last_fsync_time_ >= std::chrono::seconds(1)) {
+                        sync_file_locked();
+                        last_fsync_time_ = now;
+                    }
                 }
             }
         }
@@ -303,12 +339,15 @@ private:
         if (file_handle_) {
             fflush(file_handle_);
             if (fsync_policy_ == FsyncPolicy::Always || fsync_policy_ == FsyncPolicy::EverySec) {
-                sync_file();
+                sync_file_locked();
             }
         }
     }
 
-    void sync_file() {
+    // Must be called while buffer_mutex_ is held.  Keeping the FILE* lifetime
+    // and every stdio operation under the same mutex prevents rewrite from
+    // closing the stream while another thread is using it.
+    void sync_file_locked() {
         if (!file_handle_) return;
 #ifdef _WIN32
         int fd = _fileno(file_handle_);
@@ -410,6 +449,7 @@ private:
 
             file_handle_ = fopen(aof_path_.c_str(), "ab");
         }
+
     }
 
     void replay_command(Store& store, const std::vector<std::string>& args) {
@@ -558,9 +598,15 @@ private:
     std::mutex buffer_mutex_;
     std::condition_variable cv_;
 
+    // Protects the lifetime of the rewrite thread.  The operation still
+    // serializes FILE*/buffer access through buffer_mutex_, while stop() joins
+    // this thread before destroying the manager underneath it.
+    std::mutex rewrite_mutex_;
+
     std::atomic<bool> running_;
     std::atomic<bool> rewrite_in_progress_;
     std::thread writer_thread_;
+    std::thread rewrite_thread_;
     std::chrono::steady_clock::time_point last_fsync_time_;
 };
 
