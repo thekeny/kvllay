@@ -114,6 +114,11 @@ public:
             return true;
         }
 
+        std::lock_guard<std::mutex> lifecycle_lock(lifecycle_mutex_);
+        if (running_) {
+            return true;
+        }
+
         bool opened = false;
         {
             std::lock_guard<std::mutex> lock(buffer_mutex_);
@@ -131,9 +136,8 @@ public:
     }
 
     void stop() {
-        if (!running_.exchange(false)) {
-            return;
-        }
+        std::lock_guard<std::mutex> lifecycle_lock(lifecycle_mutex_);
+        running_.store(false);
 
         {
             std::lock_guard<std::mutex> lock(buffer_mutex_);
@@ -592,6 +596,8 @@ private:
     bool enabled_;
     FsyncPolicy fsync_policy_;
     FILE* file_handle_;
+
+    std::mutex lifecycle_mutex_;
 
     std::string active_buffer_;
     std::string flushing_buffer_;

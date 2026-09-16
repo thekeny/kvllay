@@ -288,7 +288,7 @@ public:
         worker_pool_.stop();
 
         if (config_.snapshot_enabled) {
-            snapshot_mgr_.stop_auto_save();
+            snapshot_mgr_.stop();
             if (store_.dirty_count() > 0) {
                 snapshot_mgr_.save_sync(store_);
             }
