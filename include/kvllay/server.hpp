@@ -8,6 +8,8 @@
 #include <vector>
 #include <thread>
 #include <atomic>
+#include <chrono>
+#include <csignal>
 #include <cstring>
 #include <constants.hpp>
 #include <resp.hpp>
@@ -32,6 +34,7 @@
     #define IS_VALID_SOCKET(s) ((s) != INVALID_SOCKET)
     #define CLOSE_SOCKET(s) closesocket(s)
 #else
+    #include <signal.h>
     #include <sys/types.h>
     #include <sys/socket.h>
     #include <netinet/in.h>
@@ -46,6 +49,39 @@
 #endif
 
 namespace kvllay {
+
+// Signal handlers may only perform async-signal-safe operations.  The handler
+// therefore sets a sig_atomic_t flag and leaves all shutdown work to the main
+// server loop.
+namespace shutdown_signal {
+
+inline volatile std::sig_atomic_t requested = 0;
+
+inline void handler(int) noexcept {
+    requested = 1;
+}
+
+inline void install() noexcept {
+    requested = 0;
+
+#ifdef _WIN32
+    std::signal(SIGINT, handler);
+    #ifdef SIGTERM
+    std::signal(SIGTERM, handler);
+    #endif
+#else
+    struct sigaction action{};
+    sigemptyset(&action.sa_mask);
+    action.sa_handler = handler;
+    // Deliberately do not use SA_RESTART: if a platform still blocks in a
+    // socket call, SIGINT/SIGTERM must be allowed to wake it up.
+    action.sa_flags = 0;
+    sigaction(SIGINT, &action, nullptr);
+    sigaction(SIGTERM, &action, nullptr);
+#endif
+}
+
+} // namespace shutdown_signal
 
 struct ServerConfig {
     int port = constants::DEFAULT_PORT;
@@ -156,6 +192,13 @@ public:
             return false;
         }
 
+        if (!set_socket_nonblocking(server_socket_)) {
+            std::cerr << "[kvllay] Failed to make listening socket non-blocking" << std::endl;
+            CLOSE_SOCKET(server_socket_);
+            server_socket_ = INVALID_SOCKET;
+            return false;
+        }
+
         running_ = true;
         std::cout << "[kvllay] Server started on " << config_.host << ":" << config_.port;
         if (!config_.password.empty()) {
@@ -167,6 +210,8 @@ public:
     }
 
     void run() {
+        shutdown_signal::install();
+
         if (!running_ && !start()) {
             return;
         }
@@ -174,16 +219,34 @@ public:
         worker_pool_.start();
 
         while (running_) {
+            if (shutdown_signal::requested) {
+                std::cout << "[kvllay] Shutdown signal received, stopping gracefully" << std::endl;
+                break;
+            }
+
             sockaddr_in client_addr{};
             socklen_t client_len = sizeof(client_addr);
             socket_t client_socket = accept(server_socket_, (sockaddr*)&client_addr, &client_len);
 
             if (!IS_VALID_SOCKET(client_socket)) {
-                if (running_) {
-                    int err = SOCKET_ERRNO;
-                    if (err == ERR_INTR) continue;
+                int err = SOCKET_ERRNO;
+                if (err == ERR_INTR) {
+                    continue;
                 }
-                continue;
+
+                if (err == ERR_AGAIN
+#ifndef _WIN32
+                    || err == EWOULDBLOCK
+#endif
+                ) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                    continue;
+                }
+
+                if (running_) {
+                    std::cerr << "[kvllay] accept() failed, stopping server" << std::endl;
+                }
+                break;
             }
 
             int nodelay = 1;
@@ -201,6 +264,10 @@ public:
 
             worker_pool_.dispatch_connection(client_socket, config_.password.empty());
         }
+
+        // stop() is idempotent, so this also covers an external stop() call
+        // racing with the accept loop.
+        stop();
     }
 
     void stop() {
