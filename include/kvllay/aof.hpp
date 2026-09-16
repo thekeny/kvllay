@@ -387,10 +387,9 @@ private:
                 if (entry.expire_at_epoch_ms == 0) {
                     serialized = Resp::array({"SET", entry.key, entry.string_val});
                 } else if (entry.expire_at_epoch_ms > now_wall) {
-                    uint64_t rem_ms = entry.expire_at_epoch_ms - now_wall;
-                    uint64_t rem_sec = (rem_ms + 999) / 1000;
-                    if (rem_sec == 0) rem_sec = 1;
-                    serialized = Resp::array({"SETEX", entry.key, std::to_string(rem_sec), entry.string_val});
+                    serialized = Resp::array({"SET", entry.key, entry.string_val});
+                    serialized += Resp::array({"PEXPIREAT", entry.key,
+                                               std::to_string(entry.expire_at_epoch_ms)});
                 } else {
                     continue;
                 }
@@ -408,8 +407,8 @@ private:
                 }
                 serialized = Resp::array(rpush_args);
                 if (entry.expire_at_epoch_ms > now_wall) {
-                    uint64_t rem_ms = entry.expire_at_epoch_ms - now_wall;
-                    serialized += Resp::array({"PEXPIRE", entry.key, std::to_string(rem_ms)});
+                    serialized += Resp::array({"PEXPIREAT", entry.key,
+                                               std::to_string(entry.expire_at_epoch_ms)});
                 }
             } else {
                 continue;
@@ -532,6 +531,14 @@ private:
             try {
                 long long ms = std::stoll(args[2]);
                 store.expire(args[1], ms > 0 ? static_cast<uint64_t>(ms) : 0);
+            } catch (...) {}
+        } else if (cmd == "PEXPIREAT" && args.size() >= 3) {
+            try {
+                size_t parsed = 0;
+                uint64_t expire_at = std::stoull(args[2], &parsed);
+                if (parsed == args[2].size()) {
+                    store.expire_at(args[1], expire_at);
+                }
             } catch (...) {}
         } else if (cmd == "PERSIST" && args.size() >= 2) {
             store.persist(args[1]);

@@ -1586,7 +1586,11 @@ public:
         return result;
     }
 
-    int expire(const std::string& key, uint64_t ttl_ms) {
+    int expire(const std::string& key, uint64_t ttl_ms, uint64_t* expire_at_result = nullptr) {
+        if (expire_at_result) {
+            *expire_at_result = 0;
+        }
+
         size_t idx = shard_index(key);
         auto& shard = shards_[idx];
         std::unique_lock<std::shared_mutex> lock(shard.mutex);
@@ -1595,6 +1599,7 @@ public:
             return 0;
         }
         uint64_t now = current_time_ms();
+        uint64_t now_wall = wall_time_ms();
         if (it->second.expire_at != 0 && it->second.expire_at <= now) {
             sub_memory(estimate_entry_memory(key, it->second));
             shard.data.erase(it);
@@ -1611,6 +1616,42 @@ public:
         }
 
         it->second.expire_at = now + ttl_ms;
+        it->second.touch(current_lru_clock());
+        shard.keys_with_ttl.insert(key);
+        if (expire_at_result) {
+            *expire_at_result = now_wall + ttl_ms;
+        }
+        dirty_++;
+        return 1;
+    }
+
+    int expire_at(const std::string& key, uint64_t expire_at_epoch_ms) {
+        size_t idx = shard_index(key);
+        auto& shard = shards_[idx];
+        std::unique_lock<std::shared_mutex> lock(shard.mutex);
+        auto it = shard.data.find(key);
+        if (it == shard.data.end()) {
+            return 0;
+        }
+
+        uint64_t now = current_time_ms();
+        uint64_t now_wall = wall_time_ms();
+        if (it->second.expire_at != 0 && it->second.expire_at <= now) {
+            sub_memory(estimate_entry_memory(key, it->second));
+            shard.data.erase(it);
+            shard.keys_with_ttl.erase(key);
+            return 0;
+        }
+
+        if (expire_at_epoch_ms <= now_wall) {
+            sub_memory(estimate_entry_memory(key, it->second));
+            shard.data.erase(it);
+            shard.keys_with_ttl.erase(key);
+            dirty_++;
+            return 1;
+        }
+
+        it->second.expire_at = now + (expire_at_epoch_ms - now_wall);
         it->second.touch(current_lru_clock());
         shard.keys_with_ttl.insert(key);
         dirty_++;

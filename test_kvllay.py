@@ -727,14 +727,24 @@ def test_persistence(port=6389):
         send_recv(sa1, "DEL aof_k1\r\n")
         send_recv(sa1, "RPUSH aof_list x y z\r\n")
         send_recv(sa1, "LPOP aof_list\r\n")
+        send_recv(sa1, "SET aof_expire_key expires_later\r\n")
+        assert send_recv(sa1, "EXPIRE aof_expire_key 1\r\n") == ":1\r\n"
         send_recv(sa1, "BGREWRITEAOF\r\n")
         time.sleep(0.2)
+        send_recv(sa1, "SET aof_direct_expire_key direct_expiry\r\n")
+        assert send_recv(sa1, "EXPIRE aof_direct_expire_key 1\r\n") == ":1\r\n"
         sa1.close()
     finally:
         p_aof1.terminate()
         p_aof1.wait()
 
     assert os.path.exists(aof_file), "AOF file was not created"
+    with open(aof_file, "rb") as aof:
+        assert b"PEXPIREAT" in aof.read(), "EXPIRE must be serialized as absolute PEXPIREAT in AOF"
+
+    # Wait until the original absolute deadline has passed. A relative EXPIRE
+    # replay would incorrectly make the key live again after the restart.
+    time.sleep(1.2)
 
     # Restart server and verify AOF replay
     p_aof2 = subprocess.Popen(["./build/kvllay", "-p", str(aof_port), "--aof", aof_file, "--no-snapshot"])
@@ -743,6 +753,8 @@ def test_persistence(port=6389):
         sa2 = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sa2.connect(("127.0.0.1", aof_port))
         assert send_recv(sa2, "GET aof_k1\r\n") == "$-1\r\n"
+        assert send_recv(sa2, "GET aof_expire_key\r\n") == "$-1\r\n"
+        assert send_recv(sa2, "GET aof_direct_expire_key\r\n") == "$-1\r\n"
         assert send_recv(sa2, "GET aof_counter\r\n") == "$2\r\n10\r\n"
         assert send_recv(sa2, "GET aof_m1\r\n") == "$5\r\nhello\r\n"
         assert send_recv(sa2, "GET aof_m2\r\n") == "$5\r\nworld\r\n"

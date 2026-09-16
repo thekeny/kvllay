@@ -97,6 +97,7 @@ public:
 
         size_t pre_out_len = out.size();
         bool is_mutating = false;
+        std::vector<std::string> aof_args;
 
         switch (cmd.size()) {
         case 3: {
@@ -218,7 +219,7 @@ public:
                 }
             } else if (iequals(cmd, "EXPIRE")) {
                 is_mutating = true;
-                handle_expire_sv(args, out);
+                handle_expire_sv(args, out, aof_args);
             } else if (iequals(cmd, "LRANGE")) {
                 handle_lrange_sv(args, out);
             } else if (iequals(cmd, "LINDEX")) {
@@ -243,7 +244,7 @@ public:
                 handle_command_sv(args, out);
             } else if (iequals(cmd, "PEXPIRE")) {
                 is_mutating = true;
-                handle_pexpire_sv(args, out);
+                handle_pexpire_sv(args, out, aof_args);
             } else if (iequals(cmd, "PERSIST")) {
                 is_mutating = true;
                 handle_persist_sv(args, out);
@@ -283,7 +284,11 @@ public:
         if (is_mutating && aof_mgr_ && aof_mgr_->is_enabled()) {
             std::string_view written(out.data() + pre_out_len, out.size() - pre_out_len);
             if (written.rfind("-ERR", 0) != 0 && written.rfind("-WRONG", 0) != 0 && written.rfind("-OOM", 0) != 0) {
-                aof_mgr_->append(args);
+                if (aof_args.empty()) {
+                    aof_mgr_->append(args);
+                } else {
+                    aof_mgr_->append(aof_args);
+                }
             }
         }
     }
@@ -847,7 +852,8 @@ private:
         Resp::append_bulk_string(out, info);
     }
 
-    void handle_expire_sv(const std::vector<std::string_view>& args, std::string& out) {
+    void handle_expire_sv(const std::vector<std::string_view>& args, std::string& out,
+                          std::vector<std::string>& aof_args) {
         if (args.size() != 3) {
             Resp::append_error(out, "wrong number of arguments for 'expire' command");
             return;
@@ -858,14 +864,15 @@ private:
             Resp::append_error(out, "value is not an integer or out of range");
             return;
         }
-        if (seconds <= 0) {
-            Resp::append_integer(out, store_.expire(std::string(args[1]), 0));
-            return;
-        }
-        Resp::append_integer(out, store_.expire(std::string(args[1]), static_cast<uint64_t>(seconds) * 1000));
+        uint64_t expire_at = 0;
+        uint64_t ttl_ms = seconds > 0 ? static_cast<uint64_t>(seconds) * 1000 : 0;
+        int result = store_.expire(std::string(args[1]), ttl_ms, &expire_at);
+        Resp::append_integer(out, result);
+        aof_args = {"PEXPIREAT", std::string(args[1]), std::to_string(expire_at)};
     }
 
-    void handle_pexpire_sv(const std::vector<std::string_view>& args, std::string& out) {
+    void handle_pexpire_sv(const std::vector<std::string_view>& args, std::string& out,
+                           std::vector<std::string>& aof_args) {
         if (args.size() != 3) {
             Resp::append_error(out, "wrong number of arguments for 'pexpire' command");
             return;
@@ -876,11 +883,11 @@ private:
             Resp::append_error(out, "value is not an integer or out of range");
             return;
         }
-        if (ms <= 0) {
-            Resp::append_integer(out, store_.expire(std::string(args[1]), 0));
-            return;
-        }
-        Resp::append_integer(out, store_.expire(std::string(args[1]), static_cast<uint64_t>(ms)));
+        uint64_t expire_at = 0;
+        uint64_t ttl_ms = ms > 0 ? static_cast<uint64_t>(ms) : 0;
+        int result = store_.expire(std::string(args[1]), ttl_ms, &expire_at);
+        Resp::append_integer(out, result);
+        aof_args = {"PEXPIREAT", std::string(args[1]), std::to_string(expire_at)};
     }
 
     void handle_ttl_sv(const std::vector<std::string_view>& args, std::string& out) {
