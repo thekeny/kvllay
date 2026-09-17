@@ -6,16 +6,16 @@ import { Reveal } from "@/components/ui/Reveal"
 export function Documentation() {
   const docsGuides = [
     {
-      title: "Core Architecture & Thread-Safety",
-      desc: "Detailed explanation of the 32-way sharded storage engine, Epoll/WSAPoll Multi-Reactor worker loops, and lock-free connection dispatching.",
+      title: "Multi-Reactor Architecture & Sharding",
+      desc: "Detailed explanation of the 32-way sharded storage engine, Epoll/WSAPoll Reactor-per-Thread worker loops, in-place memory buffer reuse, and lock-free dispatching.",
     },
     {
-      title: "Redis RESP2 Protocol Compatibility",
-      desc: "Complete reference for all commands: Strings (GET, SET, MGET, MSET), Counters (INCR, DECR), Lists & Queues (LPUSH, RPUSH, LPOP, RPOP), TTL, and Config.",
+      title: "Redis RESP2 Protocol, Transactions & Handshakes",
+      desc: "Complete reference for Strings, Lists, Counters, atomic MULTI/EXEC/DISCARD transactions, HELLO protocol negotiation, and CLIENT connection management.",
     },
     {
-      title: "Benchmark Methodology & Repro",
-      desc: "Step-by-step reproduction instructions with redis-benchmark, custom Python stress scripts, and Docker cgroups memory profiling.",
+      title: "Crash Recovery, Persistence & Benchmarking",
+      desc: "Zero-fork point-in-time CRC32 snapshots, double-buffered asynchronous AOF with BGREWRITEAOF, corruption recovery, and official redis-benchmark reproduction.",
     },
   ]
 

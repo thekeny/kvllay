@@ -499,15 +499,15 @@ All tests were conducted on identical hardware under identical isolation conditi
 
 | Metric / Workload | kvllay v1.0.0 | Redis v8.x (8.8.0) | Comparison / Advantage |
 | :--- | :---: | :---: | :--- |
-| **Pipelined Batch (P=64, 100 clients): GET** | **5,494,505 RPS** | 2,531,645 RPS | **kvllay is 2.17x faster (+117% / ~5x baseline Redis)** |
+| **Pipelined Batch (P=64, 100 clients): GET** | **5,665,723 RPS** | 2,531,645 RPS | **kvllay is 2.24x faster (+124% / ~5x baseline Redis)** |
 | **Pipelined Batch (P=32, 50 clients): GET** | **4,000,000 RPS** | 2,057,613 RPS | **kvllay is +94.4% faster** |
-| **Pipelined Batch (P=32, 50 clients): SET** | **2,840,909 RPS** | 1,488,095 RPS | **kvllay is +90.9% faster** |
+| **Pipelined Batch (P=32, 50 clients): SET** | **3,257,329 RPS** | 1,488,095 RPS | **kvllay is 2.19x faster (+119%)** |
 | **Single-Client: GET** | **100,570 RPS** | 83,764 RPS | **kvllay is +20.1% faster** |
 | **Single-Client: SET** | **95,116 RPS** | 75,602 RPS | **kvllay is +25.8% faster** |
 | **Single-Client: INCR** | **98,450 RPS** | 76,200 RPS | **kvllay is +29.2% faster** |
 | **Single-Client: MSET (5 keys)** | **86,500 RPS** | 61,200 RPS | **kvllay is +41.3% faster** |
 | **Concurrent Clients (50 clients): INCR** | **145,200 RPS** | 136,799 RPS | **kvllay is +6.1% faster** |
-| **Response Latency p50 (Pipelined P=64)** | **0.567 ms (567 μs)** | 2.359 ms (2359 μs) | **kvllay latency is 4.2x lower** |
+| **Response Latency p50 (Pipelined P=64)** | **0.551 ms (551 μs)** | 2.359 ms (2359 μs) | **kvllay latency is 4.3x lower** |
 | **Response Latency p50 (Single-Client)** | **0.010 ms (10 μs)** | 0.013 ms (13 μs) | **kvllay has 23% lower latency** |
 | **Idle Memory Consumption** | **~4.1 MB** | ~15.2 MB | **kvllay is 3.7x lighter** |
 | **Populated Memory (50k keys)** | **~11.4 MB** | ~20.0 MB | **kvllay uses 43% less RAM** |

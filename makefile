@@ -87,14 +87,19 @@ static-windows:
 run:
 	${RUN}
 
+PYTHON ?= $(shell if [ -f .venv/bin/python3 ]; then echo .venv/bin/python3; else echo python3; fi)
+
 test:
-	python3 test_kvllay.py 6389
+	$(PYTHON) test_kvllay.py 6389
 
 test-redis-py:
-	python3 test_redis_py.py 6389
+	$(PYTHON) test_redis_py.py 6389
 
 clean:
 	$(REMOVE)
+
+render-benchmarks:
+	$(PYTHON) docs/images/render_benchmarks.py
 
 release:
 	@bash scripts/release.sh $(VERSION)

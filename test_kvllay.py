@@ -767,7 +767,34 @@ def test_persistence(port=6389):
         if os.path.exists(aof_file):
             os.remove(aof_file)
 
-    # 7. Snapshot CRC32 corruption detection
+    # 7. Truncated AOF Crash Recovery
+    print("Testing truncated AOF crash recovery...")
+    trunc_aof = "test_trunc_crash.aof"
+    with open(trunc_aof, "wb") as f:
+        # Valid command 1
+        f.write(b"*3\r\n$3\r\nSET\r\n$7\r\nvalid_k\r\n$7\r\nvalid_v\r\n")
+        # Valid command 2
+        f.write(b"*2\r\n$4\r\nINCR\r\n$9\r\nsaved_num\r\n")
+        # Incomplete / cut-off command at crash
+        f.write(b"*3\r\n$3\r\nSET\r\n$11\r\nincomplete_\r\n$20\r\ntruncated_payload_mi")
+
+    p_trunc = subprocess.Popen(["./build/kvllay", "-p", "6397", "--aof", trunc_aof, "--no-snapshot"])
+    time.sleep(0.3)
+    try:
+        st = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        st.connect(("127.0.0.1", 6397))
+        assert send_recv(st, "GET valid_k\r\n") == "$7\r\nvalid_v\r\n"
+        assert send_recv(st, "GET saved_num\r\n") == "$1\r\n1\r\n"
+        assert send_recv(st, "GET incomplete_\r\n") == "$-1\r\n"
+        st.close()
+        print("[PASS] Truncated AOF cleanly recovered valid commands without hanging")
+    finally:
+        p_trunc.terminate()
+        p_trunc.wait()
+        if os.path.exists(trunc_aof):
+            os.remove(trunc_aof)
+
+    # 8. Snapshot CRC32 corruption detection
     print("Testing CRC32 snapshot corruption detection...")
     corrupt_file = "corrupt_test.kvl"
     with open(corrupt_file, "wb") as f:

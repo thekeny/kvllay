@@ -29,24 +29,35 @@ export function CodeIntegration() {
   const snippets = {
     python: `import redis
 
-client = redis.Redis(host='localhost', port=6379)
+client = redis.Redis(host='localhost', port=6379, decode_responses=True)
+
+# 1. Standard String caching with TTL
 client.set("session:token", "jwt_payload", ex=3600)
-
 val = client.get("session:token")
-ttl = client.ttl("session:token")
 
-print(f"User: {val.decode()} (Remaining TTL: {ttl}s)")`,
+# 2. Atomic Transaction (MULTI / EXEC)
+pipe = client.pipeline(transaction=True)
+pipe.set("user:101:status", "active")
+pipe.incr("user:101:visits")
+res = pipe.execute()
+print(f"User: {val}, Tx Committed: {res}")`,
 
     node: `import Redis from 'ioredis';
 
 const redis = new Redis({ host: '127.0.0.1', port: 6379 });
+
+// 1. Standard String caching with TTL
 await redis.set('cache:products', JSON.stringify([{ id: 1 }]), 'EX', 600);
-
 const data = await redis.get('cache:products');
-console.log('Products:', JSON.parse(data));
 
-const keys = await redis.keys('cache:*');
-console.log(\`Active keys: \${keys.length}\`);`,
+// 2. Atomic Pipeline Transaction (MULTI / EXEC)
+const txResult = await redis
+  .multi()
+  .set('user:session', 'active')
+  .incr('analytics:pageviews')
+  .exec();
+
+console.log('Products:', JSON.parse(data), 'Tx:', txResult);`,
 
     go: `package main
 
@@ -63,11 +74,18 @@ func main() {
         Addr: "localhost:6379",
     })
 
+    // 1. Set key with TTL
     err := rdb.Set(ctx, "app:status", "online", 10*time.Minute).Err()
     if err != nil { panic(err) }
 
-    val, _ := rdb.Get(ctx, "app:status").Result()
-    fmt.Println("kvllay status:", val)
+    // 2. Atomic TxPipeline (MULTI / EXEC)
+    pipe := rdb.TxPipeline()
+    pipe.Set(ctx, "user:101:status", "active", 0)
+    pipe.Incr(ctx, "user:101:logins")
+    _, err = pipe.Exec(ctx)
+    if err != nil { panic(err) }
+
+    fmt.Println("kvllay transaction committed successfully")
 }`,
   }
 
