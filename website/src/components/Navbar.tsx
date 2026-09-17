@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useState, useRef, useEffect } from "react"
 import { IconBrandGithub, IconArrowRight, IconMenu2, IconX, IconStar } from "@tabler/icons-react"
 import logoImg from "@root/logo.png"
 import { useGithubStars, formatStars } from "@/lib/useGithubStars"
@@ -8,6 +8,7 @@ import { paths } from "@/config/paths"
 export function Navbar() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const { stars, isLoading } = useGithubStars()
+  const headerRef = useRef<HTMLElement>(null)
 
   const navLinks = [
     { name: "Why Kvllay", href: paths.why },
@@ -17,8 +18,47 @@ export function Navbar() {
     { name: "Docs", href: paths.docs },
   ]
 
+  useEffect(() => {
+    if (!mobileMenuOpen) return
+
+    const handlePointerDown = (e: MouseEvent | TouchEvent) => {
+      if (headerRef.current && !headerRef.current.contains(e.target as Node)) {
+        setMobileMenuOpen(false)
+      }
+    }
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setMobileMenuOpen(false)
+      }
+    }
+
+    document.addEventListener("mousedown", handlePointerDown)
+    document.addEventListener("touchstart", handlePointerDown)
+    window.addEventListener("keydown", handleKeyDown)
+
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown)
+      document.removeEventListener("touchstart", handlePointerDown)
+      window.removeEventListener("keydown", handleKeyDown)
+    }
+  }, [mobileMenuOpen])
+
+  useEffect(() => {
+    const handleResize = () => {
+      if (window.innerWidth >= 768) {
+        setMobileMenuOpen(false)
+      }
+    }
+    window.addEventListener("resize", handleResize)
+    return () => window.removeEventListener("resize", handleResize)
+  }, [])
+
   return (
-    <header className="sticky top-0 z-50 w-full bg-[#070A10]/90 backdrop-blur-md border-b border-[#1B2436]">
+    <header
+      ref={headerRef}
+      className="sticky top-0 z-50 w-full bg-[#070A10]/90 backdrop-blur-md border-b border-[#1B2436]"
+    >
       <div className="max-w-[1240px] mx-auto px-4 sm:px-6 lg:px-10 h-[64px] sm:h-[76px] flex items-center justify-between">
         <a href={paths.home} className="flex items-center gap-2.5 sm:gap-3 group focus:outline-none shrink-0">
           <div className="w-[32px] h-[32px] sm:w-[38px] sm:h-[38px] rounded-lg overflow-hidden flex items-center justify-center transition-transform group-hover:scale-105">
@@ -77,7 +117,7 @@ export function Navbar() {
       </div>
 
       {mobileMenuOpen && (
-        <div className="md:hidden border-b border-[#1B2436] bg-[#0A0E17]/98 px-4 sm:px-6 py-4 sm:py-6 flex flex-col gap-4 animate-in slide-in-from-top-2 duration-200">
+        <div className="md:hidden absolute top-full left-0 right-0 w-full border-b border-[#1B2436] bg-[#0A0E17]/98 backdrop-blur-xl px-4 sm:px-6 py-4 sm:py-6 flex flex-col gap-4 shadow-2xl shadow-black/80 max-h-[calc(100dvh-64px)] sm:max-h-[calc(100dvh-76px)] overflow-y-auto animate-in slide-in-from-top-2 duration-200">
           <nav className="flex flex-col gap-2.5">
             {navLinks.map((link) => (
               <a
