@@ -88,12 +88,10 @@ run:
 	${RUN}
 
 PYTHON ?= $(shell if [ -f .venv/bin/python3 ]; then echo .venv/bin/python3; else echo python3; fi)
+TEST_PORT ?= 6389
 
 test:
-	$(PYTHON) test_kvllay.py 6389
-
-test-redis-py:
-	$(PYTHON) test_redis_py.py 6389
+	$(PYTHON) tests/run_all.py --start-server $(TEST_PORT)
 
 clean:
 	$(REMOVE)
@@ -117,4 +115,3 @@ docker-compose-down:
 	docker compose down
 
 .PHONY: default compile compile-jemalloc compile-mimalloc static-linux static-windows run test clean release docker-build docker-run docker-compose-up docker-compose-down
-
