@@ -55,6 +55,11 @@ def test_kvllay(port=6389):
     assert "mykey" in res and "user" in res
     print("[PASS] KEYS *")
 
+    # KEYS requires exactly one pattern argument, like Redis.
+    res = send_recv(s, "KEYS\r\n")
+    assert res == "-ERR wrong number of arguments for 'keys' command\r\n", f"KEYS without args failed: {repr(res)}"
+    print("[PASS] KEYS without arguments")
+
     # Test 8: DBSIZE
     res = send_recv(s, "DBSIZE\r\n")
     assert res == ":2\r\n", f"DBSIZE failed: {repr(res)}"
@@ -79,12 +84,61 @@ def test_kvllay(port=6389):
     assert res == "*0\r\n", f"COMMAND failed: {repr(res)}"
     print("[PASS] COMMAND (handshake)")
 
-    # Test 12: INFO
+    # Test 12: HELLO protocol negotiation
+    res = send_recv(s, "HELLO 2\r\n")
+    assert res.startswith("*14\r\n") and "$6\r\nserver\r\n" in res, f"HELLO 2 failed: {repr(res)}"
+    res = send_recv(s, "HELLO 3 SETNAME test-client\r\n")
+    assert res.startswith("%7\r\n") and "$6\r\nserver\r\n" in res, f"HELLO 3 failed: {repr(res)}"
+    print("[PASS] HELLO RESP2/RESP3 handshake")
+
+    # Test 13: INFO
     res = send_recv(s, "INFO\r\n")
     assert "kvllay_version:1.0.0" in res, f"INFO failed: {repr(res)}"
     print("[PASS] INFO")
 
-    # Test 13: QUIT
+    # Test 13: SELECT
+    res = send_recv(s, "SELECT 0\r\n")
+    assert res == "+OK\r\n", f"SELECT 0 failed: {repr(res)}"
+    res = send_recv(s, "SELECT +0\r\n")
+    assert res == "+OK\r\n", f"SELECT +0 failed: {repr(res)}"
+    res = send_recv(s, "*2\r\n$6\r\nSELECT\r\n$1\r\n0\r\n")
+    assert res == "+OK\r\n", f"RESP SELECT 0 failed: {repr(res)}"
+    res = send_recv(s, "SELECT 1\r\n")
+    assert res == "-ERR DB index is out of range\r\n", f"SELECT 1 failed: {repr(res)}"
+    res = send_recv(s, "SELECT -1\r\n")
+    assert res == "-ERR DB index is out of range\r\n", f"SELECT -1 failed: {repr(res)}"
+    res = send_recv(s, "SELECT invalid\r\n")
+    assert res == "-ERR value is not an integer or out of range\r\n", f"SELECT invalid failed: {repr(res)}"
+    res = send_recv(s, "SELECT\r\n")
+    assert res == "-ERR wrong number of arguments for 'select' command\r\n", f"SELECT no args failed: {repr(res)}"
+    res = send_recv(s, "SELECT 0 1\r\n")
+    assert res == "-ERR wrong number of arguments for 'select' command\r\n", f"SELECT too many args failed: {repr(res)}"
+    print("[PASS] SELECT (db 0, out of range db > 0, negative db, invalid args)")
+
+    # Test CLIENT commands
+    res = send_recv(s, "CLIENT ID\r\n")
+    assert res.startswith(":") and int(res[1:].strip()) > 0, f"CLIENT ID failed: {repr(res)}"
+    assert send_recv(s, "CLIENT GETNAME\r\n") == "$11\r\ntest-client\r\n"
+    s_fresh = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s_fresh.connect(("127.0.0.1", port))
+    assert send_recv(s_fresh, "CLIENT GETNAME\r\n") == "$-1\r\n"
+    s_fresh.close()
+    assert send_recv(s, "CLIENT SETNAME valid-name\r\n") == "+OK\r\n"
+    assert send_recv(s, "CLIENT GETNAME\r\n") == "$10\r\nvalid-name\r\n"
+    res = send_recv(s, "CLIENT SETNAME 'invalid name'\r\n")
+    assert res == "-ERR client name cannot contain spaces, newlines or special characters\r\n"
+    assert send_recv(s, "CLIENT SETINFO LIB-NAME test-lib\r\n") == "+OK\r\n"
+    assert send_recv(s, "CLIENT SETINFO LIB-VER 1.2.3\r\n") == "+OK\r\n"
+    res_list = send_recv(s, "CLIENT LIST\r\n")
+    assert "name=valid-name" in res_list and "lib-name=test-lib" in res_list and "lib-ver=1.2.3" in res_list
+    print("[PASS] CLIENT (ID, SETNAME, GETNAME, SETINFO, LIST, whitespace validation)")
+
+    # Test SET options with leading plus
+    assert send_recv(s, "SET set_plus_k val EX +10\r\n") == "+OK\r\n"
+    assert send_recv(s, "GET set_plus_k\r\n") == "$3\r\nval\r\n"
+    print("[PASS] SET with leading plus duration (EX +10)")
+
+    # Test 14: QUIT
     res = send_recv(s, "QUIT\r\n")
     assert res == "+OK\r\n", f"QUIT failed: {repr(res)}"
     rem = s.recv(1024)
@@ -673,14 +727,24 @@ def test_persistence(port=6389):
         send_recv(sa1, "DEL aof_k1\r\n")
         send_recv(sa1, "RPUSH aof_list x y z\r\n")
         send_recv(sa1, "LPOP aof_list\r\n")
+        send_recv(sa1, "SET aof_expire_key expires_later\r\n")
+        assert send_recv(sa1, "EXPIRE aof_expire_key 1\r\n") == ":1\r\n"
         send_recv(sa1, "BGREWRITEAOF\r\n")
         time.sleep(0.2)
+        send_recv(sa1, "SET aof_direct_expire_key direct_expiry\r\n")
+        assert send_recv(sa1, "EXPIRE aof_direct_expire_key 1\r\n") == ":1\r\n"
         sa1.close()
     finally:
         p_aof1.terminate()
         p_aof1.wait()
 
     assert os.path.exists(aof_file), "AOF file was not created"
+    with open(aof_file, "rb") as aof:
+        assert b"PEXPIREAT" in aof.read(), "EXPIRE must be serialized as absolute PEXPIREAT in AOF"
+
+    # Wait until the original absolute deadline has passed. A relative EXPIRE
+    # replay would incorrectly make the key live again after the restart.
+    time.sleep(1.2)
 
     # Restart server and verify AOF replay
     p_aof2 = subprocess.Popen(["./build/kvllay", "-p", str(aof_port), "--aof", aof_file, "--no-snapshot"])
@@ -689,6 +753,8 @@ def test_persistence(port=6389):
         sa2 = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sa2.connect(("127.0.0.1", aof_port))
         assert send_recv(sa2, "GET aof_k1\r\n") == "$-1\r\n"
+        assert send_recv(sa2, "GET aof_expire_key\r\n") == "$-1\r\n"
+        assert send_recv(sa2, "GET aof_direct_expire_key\r\n") == "$-1\r\n"
         assert send_recv(sa2, "GET aof_counter\r\n") == "$2\r\n10\r\n"
         assert send_recv(sa2, "GET aof_m1\r\n") == "$5\r\nhello\r\n"
         assert send_recv(sa2, "GET aof_m2\r\n") == "$5\r\nworld\r\n"
@@ -701,7 +767,34 @@ def test_persistence(port=6389):
         if os.path.exists(aof_file):
             os.remove(aof_file)
 
-    # 7. Snapshot CRC32 corruption detection
+    # 7. Truncated AOF Crash Recovery
+    print("Testing truncated AOF crash recovery...")
+    trunc_aof = "test_trunc_crash.aof"
+    with open(trunc_aof, "wb") as f:
+        # Valid command 1
+        f.write(b"*3\r\n$3\r\nSET\r\n$7\r\nvalid_k\r\n$7\r\nvalid_v\r\n")
+        # Valid command 2
+        f.write(b"*2\r\n$4\r\nINCR\r\n$9\r\nsaved_num\r\n")
+        # Incomplete / cut-off command at crash
+        f.write(b"*3\r\n$3\r\nSET\r\n$11\r\nincomplete_\r\n$20\r\ntruncated_payload_mi")
+
+    p_trunc = subprocess.Popen(["./build/kvllay", "-p", "6397", "--aof", trunc_aof, "--no-snapshot"])
+    time.sleep(0.3)
+    try:
+        st = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        st.connect(("127.0.0.1", 6397))
+        assert send_recv(st, "GET valid_k\r\n") == "$7\r\nvalid_v\r\n"
+        assert send_recv(st, "GET saved_num\r\n") == "$1\r\n1\r\n"
+        assert send_recv(st, "GET incomplete_\r\n") == "$-1\r\n"
+        st.close()
+        print("[PASS] Truncated AOF cleanly recovered valid commands without hanging")
+    finally:
+        p_trunc.terminate()
+        p_trunc.wait()
+        if os.path.exists(trunc_aof):
+            os.remove(trunc_aof)
+
+    # 8. Snapshot CRC32 corruption detection
     print("Testing CRC32 snapshot corruption detection...")
     corrupt_file = "corrupt_test.kvl"
     with open(corrupt_file, "wb") as f:
@@ -1262,6 +1355,35 @@ def test_event_loop_and_high_concurrency(port=6389):
         
     print("[PASS] All Event Loop & High Concurrency tests passed successfully!")
 
+def test_transactions_and_pipelines(port=6389):
+    print(f"\n--- Testing Transactions & Pipelines on port {port} ---")
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.connect(("127.0.0.1", port))
+
+    res = send_recv(s, "MULTI\r\nSET transaction_key value\r\nGET transaction_key\r\nEXEC\r\n")
+    expected = "+OK\r\n+QUEUED\r\n+QUEUED\r\n*2\r\n+OK\r\n$5\r\nvalue\r\n"
+    assert res == expected, f"MULTI/EXEC failed: {res!r}"
+
+    res = send_recv(s, "MULTI\r\nSET discarded value\r\nDISCARD\r\nGET discarded\r\n")
+    expected = "+OK\r\n+QUEUED\r\n+OK\r\n$-1\r\n"
+    assert res == expected, f"DISCARD failed: {res!r}"
+
+    res = send_recv(s, "SET pipeline_one 1\r\nGET pipeline_one\r\n")
+    assert res == "+OK\r\n$1\r\n1\r\n", f"ordinary pipeline failed: {res!r}"
+
+    assert send_recv(s, "EXEC\r\n") == "-ERR EXEC without MULTI\r\n"
+    assert send_recv(s, "DISCARD\r\n") == "-ERR DISCARD without MULTI\r\n"
+    s.close()
+
+    # QUIT inside MULTI
+    s_quit = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s_quit.connect(("127.0.0.1", port))
+    res = send_recv(s_quit, "MULTI\r\nSET qk qv\r\nQUIT\r\n")
+    assert res == "+OK\r\n+QUEUED\r\n+OK\r\n", f"QUIT in MULTI failed: {res!r}"
+    assert len(s_quit.recv(1024)) == 0, "Expected socket close after QUIT in MULTI"
+    s_quit.close()
+    print("[PASS] MULTI/EXEC/DISCARD, pipeline, and QUIT in MULTI")
+
 def test_allocator_and_memory_optimization(port=6389):
     print(f"\n--- Testing Memory Manager & Allocator Optimization (Port {port}) ---")
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -1344,8 +1466,6 @@ if __name__ == "__main__":
     test_lists_and_queues(test_port)
     test_maxmemory_and_eviction(test_port)
     test_persistence(test_port)
+    test_transactions_and_pipelines(test_port)
     test_event_loop_and_high_concurrency(test_port)
     test_allocator_and_memory_optimization(test_port)
-
-
-

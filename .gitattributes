@@ -1,4 +1,5 @@
-# Exclude website and documentation from GitHub language statistics
+# Exclude website frontend from repository language statistics
 website/** linguist-detectable=false
-website/** linguist-documentation
-docs/** linguist-documentation
+
+# Keep docs HTML detectable in language statistics
+docs/images/*.html linguist-detectable=true

@@ -1,4 +1,4 @@
-import { IconTerminal2, IconShield, IconClock, IconLock, IconBox, IconDeviceDesktop } from "@tabler/icons-react"
+import { IconTerminal2, IconShield, IconClock, IconBox, IconArrowsExchange, IconCpu } from "@tabler/icons-react"
 import { paths } from "@/config/paths"
 import { Reveal } from "@/components/ui/Reveal"
 
@@ -6,33 +6,33 @@ export function FeaturesBento() {
   const features = [
     {
       icon: IconTerminal2,
-      title: "100% RESP2 Compatible",
-      desc: "Implements Redis RESP2 serialization and inline commands. Seamlessly handles arrays, bulk strings, integers, and errors so your existing code just works.",
+      title: "100% RESP2 & Protocol Handshake",
+      desc: "Implements Redis RESP2 serialization, HELLO 2/3 negotiation, CLIENT management (ID, SETNAME, LIST), and SELECT 0 so official SDKs connect out of the box.",
     },
     {
       icon: IconShield,
       title: "Multi-Reactor & Sharding",
-      desc: "Epoll & WSAPoll worker pool combined with 32-way lock-striped sharded storage (alignas(64)) delivers over 5.49M req/s with zero false sharing.",
+      desc: "Non-blocking Epoll & WSAPoll worker pool combined with 32-way cache-line aligned (alignas(64)) lock-striped storage. Delivers over 5.67M req/s with zero false sharing.",
+    },
+    {
+      icon: IconArrowsExchange,
+      title: "ACID Transactions & Pipelines",
+      desc: "Full MULTI, EXEC, and DISCARD support with strict connection-local transactional queuing and zero-delay non-blocking pipelining.",
     },
     {
       icon: IconClock,
-      title: "TTL, Persistence & LRU",
-      desc: "Point-in-time CRC32 snapshots, double-buffered AOF log with async fsync, passive/active TTL sweeps, and memory eviction (allkeys-lru, volatile-lru).",
+      title: "Zero-Fork Snapshots & AOF",
+      desc: "Point-in-time CRC32 snapshots without Redis fork() latency or COW RAM doubling. Double-buffered AOF with BGREWRITEAOF, TTL sweeps, and LRU eviction.",
     },
     {
-      icon: IconLock,
-      title: "Security & Authentication",
-      desc: "Configure password protection via requirepass / -a. Enforces exact authorization with standard NOAUTH and WRONGPASS errors strictly before command execution.",
+      icon: IconCpu,
+      title: "Memory Compaction & Allocators",
+      desc: "In-place string buffer reuse eliminating heap fragmentation, zero-allocation counters, and pluggable allocators (libc, jemalloc, mimalloc) with RSS tracking.",
     },
     {
       icon: IconBox,
-      title: "1.6 MB Scratch Container",
-      desc: "Multi-stage Docker scratch build generates an ultra-lean binary with zero glibc or shared library dependencies. Pull in under 1 second anywhere.",
-    },
-    {
-      icon: IconDeviceDesktop,
-      title: "Cross-Platform Native",
-      desc: "Unified modern socket engine: POSIX sockets on Linux, Winsock2 on Windows. Standalone pre-compiled executables available for both with zero setup.",
+      title: "1.6 MB Scratch & Signal Safety",
+      desc: "Ultra-lean 1.6 MB Docker scratch build with zero glibc dependencies. Full OS signal handling (SIGINT/SIGTERM) guarantees clean persistence flushing on shutdown.",
     },
   ]
 

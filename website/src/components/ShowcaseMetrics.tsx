@@ -23,7 +23,7 @@ export function ShowcaseMetrics() {
     },
     {
       icon: IconGauge,
-      value: "5.49M req/s",
+      value: "5.67M req/s",
       title: "Peak Throughput",
       comparison: "p50 latency 10 μs (~5x vs baseline Redis)",
     },
@@ -90,9 +90,30 @@ export function ShowcaseMetrics() {
 
             <div className="flex items-center gap-2.5 whitespace-nowrap">
               <span className="text-[#8B9BB4] select-none">127.0.0.1:6379&gt;</span>
+              <span className="text-[#F0F6FC]">MULTI</span>
+              <span className="text-[#546682] select-none">➔</span>
+              <span className="text-[#00E5A3] font-bold">OK</span>
+            </div>
+
+            <div className="flex items-center gap-2.5 whitespace-nowrap">
+              <span className="text-[#8B9BB4] select-none">127.0.0.1:6379(TX)&gt;</span>
+              <span className="text-[#F0F6FC]">INCR counter:visits</span>
+              <span className="text-[#546682] select-none">➔</span>
+              <span className="text-[#00E5A3] font-bold">QUEUED</span>
+            </div>
+
+            <div className="flex items-center gap-2.5 whitespace-nowrap">
+              <span className="text-[#8B9BB4] select-none">127.0.0.1:6379(TX)&gt;</span>
+              <span className="text-[#F0F6FC]">EXEC</span>
+              <span className="text-[#546682] select-none">➔</span>
+              <span className="text-[#FBBF24]">1) (integer) 1</span>
+            </div>
+
+            <div className="flex items-center gap-2.5 whitespace-nowrap">
+              <span className="text-[#8B9BB4] select-none">127.0.0.1:6379&gt;</span>
               <span className="text-[#F0F6FC]">DBSIZE</span>
               <span className="text-[#546682] select-none">➔</span>
-              <span className="text-[#FBBF24]">(integer) 2</span>
+              <span className="text-[#FBBF24]">(integer) 3</span>
             </div>
 
             <div className="flex items-center gap-2 whitespace-nowrap pt-0.5">

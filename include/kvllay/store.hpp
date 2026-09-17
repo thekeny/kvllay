@@ -130,6 +130,11 @@ public:
         WrongType
     };
 
+    enum class SetStatus {
+        Applied,
+        NotApplied
+    };
+
     enum class ListPushStatus {
         Success,
         WrongType
@@ -393,14 +398,39 @@ public:
         return modify_int(key, delta, result_val, true);
     }
 
-    bool set(std::string_view key, std::string_view value) {
+    SetStatus set_with_options(std::string_view key, std::string_view value,
+                               uint64_t ttl_ms = 0, bool keep_ttl = false,
+                               bool nx = false, bool xx = false) {
         size_t idx = shard_index(key);
         auto& shard = shards_[idx];
+        uint64_t now_ms = current_time_ms();
         uint64_t now_sec = current_lru_clock();
         std::string k(key);
         {
             std::unique_lock<std::shared_mutex> lock(shard.mutex);
             auto it = shard.data.find(k);
+
+            // Expired entries must behave as absent for NX/XX and should not
+            // retain their memory until the active eviction pass runs.
+            if (it != shard.data.end() && it->second.expire_at != 0 && it->second.expire_at <= now_ms) {
+                sub_memory(estimate_entry_memory(k, it->second));
+                shard.data.erase(it);
+                shard.keys_with_ttl.erase(k);
+                it = shard.data.end();
+            }
+
+            if ((nx && it != shard.data.end()) || (xx && it == shard.data.end())) {
+                return SetStatus::NotApplied;
+            }
+
+            uint64_t expire_at = 0;
+            if (ttl_ms != 0) {
+                expire_at = now_ms + ttl_ms;
+            } else if (keep_ttl && it != shard.data.end()) {
+                expire_at = it->second.expire_at;
+            }
+            bool had_ttl = (it != shard.data.end() && it->second.expire_at != 0);
+
             if (it != shard.data.end()) {
                 size_t old_mem = estimate_entry_memory(it->first, it->second);
                 if (it->second.is_string()) {
@@ -408,7 +438,7 @@ public:
                 } else {
                     it->second.data.emplace<std::string>(value);
                 }
-                it->second.expire_at = 0;
+                it->second.expire_at = expire_at;
                 it->second.touch(now_sec);
                 size_t new_mem = estimate_entry_memory(it->first, it->second);
                 if (new_mem > old_mem) {
@@ -419,15 +449,21 @@ public:
             } else {
                 shard.data.emplace(std::piecewise_construct,
                                    std::forward_as_tuple(std::move(k)),
-                                   std::forward_as_tuple(std::string(value), 0, now_sec));
+                                   std::forward_as_tuple(std::string(value), expire_at, now_sec));
                 add_memory(estimate_string_memory(key, value));
             }
-            if (!shard.keys_with_ttl.empty()) {
+            if (expire_at != 0) {
+                shard.keys_with_ttl.insert(std::string(key));
+            } else if (had_ttl && !shard.keys_with_ttl.empty()) {
                 shard.keys_with_ttl.erase(std::string(key));
             }
         }
         dirty_++;
-        return true;
+        return SetStatus::Applied;
+    }
+
+    bool set(std::string_view key, std::string_view value) {
+        return set_with_options(key, value) == SetStatus::Applied;
     }
 
     bool mset(const std::vector<std::pair<std::string, std::string>>& kvs) {
@@ -514,7 +550,7 @@ public:
         return true;
     }
 
-    bool get_and_append(std::string_view key, std::string& out) {
+    bool get_and_append(std::string_view key, std::string& out, int protocol = 2) {
         size_t idx = shard_index(key);
         auto& shard = shards_[idx];
         uint64_t now = current_time_ms();
@@ -524,7 +560,7 @@ public:
             std::shared_lock<std::shared_mutex> lock(shard.mutex);
             auto it = shard.data.find(k);
             if (it == shard.data.end()) {
-                Resp::append_null_bulk_string(out);
+                Resp::append_null_bulk_string(out, protocol);
                 return true;
             }
             if (it->second.expire_at == 0 || it->second.expire_at > now) {
@@ -547,7 +583,7 @@ public:
                 if (!shard.keys_with_ttl.empty()) {
                     shard.keys_with_ttl.erase(k);
                 }
-                Resp::append_null_bulk_string(out);
+                Resp::append_null_bulk_string(out, protocol);
                 return true;
             }
             if (!it->second.is_string()) {
@@ -558,7 +594,7 @@ public:
             Resp::append_bulk_string(out, it->second.as_string());
             return true;
         }
-        Resp::append_null_bulk_string(out);
+        Resp::append_null_bulk_string(out, protocol);
         return true;
     }
 
@@ -600,7 +636,7 @@ public:
         return {GetStatus::NotFound, ""};
     }
 
-    void mget_and_append(const std::vector<std::string_view>& keys, std::string& out) {
+    void mget_and_append(const std::vector<std::string_view>& keys, std::string& out, int protocol = 2) {
         uint64_t now = current_time_ms();
         uint64_t now_sec = current_lru_clock();
         std::vector<std::string> expired_keys;
@@ -626,12 +662,12 @@ public:
             std::string k(key);
             auto it = shard.data.find(k);
             if (it == shard.data.end()) {
-                Resp::append_null_bulk_string(out);
+                Resp::append_null_bulk_string(out, protocol);
             } else if (it->second.expire_at != 0 && it->second.expire_at <= now) {
-                Resp::append_null_bulk_string(out);
+                Resp::append_null_bulk_string(out, protocol);
                 expired_keys.push_back(std::move(k));
             } else if (!it->second.is_string()) {
-                Resp::append_null_bulk_string(out);
+                Resp::append_null_bulk_string(out, protocol);
             } else {
                 it->second.touch(now_sec);
                 Resp::append_bulk_string(out, it->second.as_string());
@@ -856,7 +892,7 @@ public:
         return rpush(std::string_view(key), values.begin(), values.end(), new_len);
     }
 
-    bool lpop_one(std::string_view key, std::string& out) {
+    bool lpop_one(std::string_view key, std::string& out, int protocol = 2) {
         size_t idx = shard_index(key);
         auto& shard = shards_[idx];
         std::unique_lock<std::shared_mutex> lock(shard.mutex);
@@ -864,7 +900,7 @@ public:
         std::string k(key);
         auto it = shard.data.find(k);
         if (it == shard.data.end()) {
-            Resp::append_null_bulk_string(out);
+            Resp::append_null_bulk_string(out, protocol);
             return true;
         }
         if (it->second.expire_at != 0 && it->second.expire_at <= now) {
@@ -873,7 +909,7 @@ public:
             if (!shard.keys_with_ttl.empty()) {
                 shard.keys_with_ttl.erase(k);
             }
-            Resp::append_null_bulk_string(out);
+            Resp::append_null_bulk_string(out, protocol);
             return true;
         }
         if (!it->second.is_list()) {
@@ -887,7 +923,7 @@ public:
             if (!shard.keys_with_ttl.empty()) {
                 shard.keys_with_ttl.erase(k);
             }
-            Resp::append_null_bulk_string(out);
+            Resp::append_null_bulk_string(out, protocol);
             return true;
         }
         Resp::append_bulk_string(out, deque.front());
@@ -906,7 +942,7 @@ public:
         return true;
     }
 
-    bool rpop_one(std::string_view key, std::string& out) {
+    bool rpop_one(std::string_view key, std::string& out, int protocol = 2) {
         size_t idx = shard_index(key);
         auto& shard = shards_[idx];
         std::unique_lock<std::shared_mutex> lock(shard.mutex);
@@ -914,7 +950,7 @@ public:
         std::string k(key);
         auto it = shard.data.find(k);
         if (it == shard.data.end()) {
-            Resp::append_null_bulk_string(out);
+            Resp::append_null_bulk_string(out, protocol);
             return true;
         }
         if (it->second.expire_at != 0 && it->second.expire_at <= now) {
@@ -923,7 +959,7 @@ public:
             if (!shard.keys_with_ttl.empty()) {
                 shard.keys_with_ttl.erase(k);
             }
-            Resp::append_null_bulk_string(out);
+            Resp::append_null_bulk_string(out, protocol);
             return true;
         }
         if (!it->second.is_list()) {
@@ -937,7 +973,7 @@ public:
             if (!shard.keys_with_ttl.empty()) {
                 shard.keys_with_ttl.erase(k);
             }
-            Resp::append_null_bulk_string(out);
+            Resp::append_null_bulk_string(out, protocol);
             return true;
         }
         Resp::append_bulk_string(out, deque.back());
@@ -1550,7 +1586,11 @@ public:
         return result;
     }
 
-    int expire(const std::string& key, uint64_t ttl_ms) {
+    int expire(const std::string& key, uint64_t ttl_ms, uint64_t* expire_at_result = nullptr) {
+        if (expire_at_result) {
+            *expire_at_result = 0;
+        }
+
         size_t idx = shard_index(key);
         auto& shard = shards_[idx];
         std::unique_lock<std::shared_mutex> lock(shard.mutex);
@@ -1559,6 +1599,7 @@ public:
             return 0;
         }
         uint64_t now = current_time_ms();
+        uint64_t now_wall = wall_time_ms();
         if (it->second.expire_at != 0 && it->second.expire_at <= now) {
             sub_memory(estimate_entry_memory(key, it->second));
             shard.data.erase(it);
@@ -1570,10 +1611,47 @@ public:
             sub_memory(estimate_entry_memory(key, it->second));
             shard.data.erase(it);
             shard.keys_with_ttl.erase(key);
+            dirty_++;
             return 1;
         }
 
         it->second.expire_at = now + ttl_ms;
+        it->second.touch(current_lru_clock());
+        shard.keys_with_ttl.insert(key);
+        if (expire_at_result) {
+            *expire_at_result = now_wall + ttl_ms;
+        }
+        dirty_++;
+        return 1;
+    }
+
+    int expire_at(const std::string& key, uint64_t expire_at_epoch_ms) {
+        size_t idx = shard_index(key);
+        auto& shard = shards_[idx];
+        std::unique_lock<std::shared_mutex> lock(shard.mutex);
+        auto it = shard.data.find(key);
+        if (it == shard.data.end()) {
+            return 0;
+        }
+
+        uint64_t now = current_time_ms();
+        uint64_t now_wall = wall_time_ms();
+        if (it->second.expire_at != 0 && it->second.expire_at <= now) {
+            sub_memory(estimate_entry_memory(key, it->second));
+            shard.data.erase(it);
+            shard.keys_with_ttl.erase(key);
+            return 0;
+        }
+
+        if (expire_at_epoch_ms <= now_wall) {
+            sub_memory(estimate_entry_memory(key, it->second));
+            shard.data.erase(it);
+            shard.keys_with_ttl.erase(key);
+            dirty_++;
+            return 1;
+        }
+
+        it->second.expire_at = now + (expire_at_epoch_ms - now_wall);
         it->second.touch(current_lru_clock());
         shard.keys_with_ttl.insert(key);
         dirty_++;

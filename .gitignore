@@ -3,6 +3,7 @@
 
 /__pycache__/
 *.pyc
+.venv/
 
 # Database persistence files (snapshots, AOF, temp swap files)
 *.kvl

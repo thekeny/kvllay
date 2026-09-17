@@ -19,8 +19,9 @@ Compatible with standard `redis-cli` and official client SDK libraries for any p
 - **Network Configuration**: bind to any network interface (`0.0.0.0` for network access, `127.0.0.1` for local access only).
 - **Commands**:
   - `AUTH [username] password`
+  - `CLIENT SETINFO LIB-NAME|LIB-VER value` / `CLIENT SETNAME name` / `CLIENT GETNAME` / `CLIENT LIST`
   - `PING [message]`
-  - `SET key value`
+  - `SET key value [EX seconds|PX milliseconds] [NX|XX] [KEEPTTL]`
   - `GET key`
   - `MSET key value [key value ...]`
   - `MGET key [key ...]`
@@ -39,12 +40,15 @@ Compatible with standard `redis-cli` and official client SDK libraries for any p
   - `LPOP key [count]` / `RPOP key [count]`
   - `LLEN key` / `LRANGE key start stop` / `LINDEX key index`
   - `TYPE key`
+  - `SELECT index`
   - `SAVE` (synchronous snapshot)
   - `BGSAVE` (background snapshot without `fork()`)
   - `LASTSAVE` (UNIX epoch timestamp of last save)
   - `BGREWRITEAOF` (background AOF compaction without `fork()`)
   - `ECHO message`
   - `COMMAND` / `COMMAND DOCS` (redis-cli handshake)
+  - `MULTI` / `EXEC` / `DISCARD` (per-connection transactions)
+  - `HELLO 2|3` (RESP2/RESP3 handshake, including optional `AUTH` and `SETNAME`)
   - `INFO` (includes `# Persistence`)
   - `QUIT`
 - **Lists & Task Queues (Basic Structures)**: $O(1)$ push/pop operations powered by `std::deque` and 32-way lock striping for high-throughput message buffers, job queues, and LIFO/FIFO pipelines.
@@ -53,6 +57,7 @@ Compatible with standard `redis-cli` and official client SDK libraries for any p
   - **Append-Only Log (`kvllay.aof`)**: Asynchronous double-buffered logger with configurable fsync (`always`, `everysec`, `no`), decoupling client request latency from disk I/O.
 - **Atomic Counters & Rate Limiting**: thread-safe counters with overflow checks for high-throughput rate limiters.
 - **Non-blocking Multi-Reactor Network Engine**: Event-driven architecture (`epoll` on Linux with `eventfd` notification, `WSAPoll` on Windows) with a fixed-size worker pool (`--threads` / `--io-threads`), scaling to 50,000+ concurrent connections with sub-millisecond latencies and zero thread churn.
+- **Transactions & Pipelining**: `MULTI` queues commands with `QUEUED`, `EXEC` executes them in FIFO order and returns a RESP array, and `DISCARD` clears the per-connection queue. Ordinary pipelined commands retain their request order.
 - **Thread Safety & Lock Striping**: 32-way sharded store with 64-byte alignment (`alignas(64)`) to eliminate false sharing, allowing concurrent writes and reads across worker threads without lock contention.
 - **Memory Manager Optimization & High-Performance Allocators**:
   - Pluggable allocators (`jemalloc` / `mimalloc` / `libc`) to eliminate heap fragmentation under intense key updates.
@@ -166,15 +171,15 @@ redis-cli -p 6379 -a "mypassword"
 
 | Workload | kvllay v1.0.0 | Redis v8.x (8.8.0) | Comparison |
 | :--- | :---: | :---: | :--- |
-| **Pipelined GET (P=64, 100 clients)** | **5,494,505 RPS** | 2,531,645 RPS | **kvllay 2.17x faster (+117% / ~5x baseline)** |
+| **Pipelined GET (P=64, 100 clients)** | **5,665,723 RPS** | 2,531,645 RPS | **kvllay 2.24x faster (+124% / ~5x baseline)** |
 | **Pipelined GET (P=32, 50 clients)** | **4,000,000 RPS** | 2,057,613 RPS | **kvllay 1.94x faster (+94.4%)** |
-| **Pipelined SET (P=32, 50 clients)** | **2,840,909 RPS** | 1,488,095 RPS | **kvllay 1.91x faster (+90.9%)** |
+| **Pipelined SET (P=32, 50 clients)** | **3,257,329 RPS** | 1,488,095 RPS | **kvllay 2.19x faster (+119%)** |
 | **Single-Client: GET** | **100,570 RPS** | 83,764 RPS | **kvllay +20.1% faster** |
 | **Single-Client: SET** | **95,116 RPS** | 75,602 RPS | **kvllay +25.8% faster** |
 | **Single-Client: INCR** | **98,450 RPS** | 76,200 RPS | **kvllay +29.2% faster** |
 | **Single-Client: MSET (5 keys)** | **86,500 RPS** | 61,200 RPS | **kvllay +41.3% faster** |
 | **Concurrent 50 Clients: INCR** | **145,200 RPS** | 136,799 RPS | **kvllay +6.1% faster** |
-| **Latency p50 (Pipelined P=64)** | **0.567 ms** | 2.359 ms | **kvllay 4.2x lower latency** |
+| **Latency p50 (Pipelined P=64)** | **0.551 ms** | 2.359 ms | **kvllay 4.3x lower latency** |
 | **Latency p50 (Single-Client)** | **0.010 ms (10 μs)** | 0.013 ms (13 μs) | **kvllay 23% lower latency** |
 | **Idle RAM** | **~4.1 MB** | ~15.2 MB | **kvllay 3.7x lighter** |
 | **50,000 Keys RAM** | **~11.4 MB** | ~20.0 MB | **kvllay 43% less RAM** |

@@ -25,10 +25,10 @@ export function Comparison() {
       id: "multi",
       tabName: "Pipelined / Batch",
       title: "Pipelined & Batch Throughput (P=32, P=64)",
-      subtitle: "Batch pipelined throughput — up to 5.49M req/s GET (~5x over unpipelined Redis, +117% over Redis P=64) and 4.0M req/s GET (P=32).",
-      badge: "5.49M req/s Peak",
+      subtitle: "Batch pipelined throughput — up to 5.67M req/s GET (~5x over unpipelined Redis, +124% over Redis P=64) and 3.26M req/s SET (P=32).",
+      badge: "5.67M req/s Peak",
       image: benchmarkMultithreaded,
-      stats: "Kvllay: 5,494,505 req/s (P=64) / 4,000,000 req/s (P=32) • Redis 8.x: 2,531,645 req/s (P=64)",
+      stats: "Kvllay: 5,665,723 req/s (P=64) / 3,257,329 req/s (SET P=32) • Redis 8.x: 2,531,645 req/s (P=64)",
     },
     {
       id: "ram",
@@ -52,10 +52,10 @@ export function Comparison() {
       id: "latency",
       tabName: "Latency p50",
       title: "Sub-Millisecond Response Latency (p50)",
-      subtitle: "50th percentile response time distribution — 10 μs single-client and 0.567 ms @ 5.49M RPS (4.2x lower latency than Redis).",
+      subtitle: "50th percentile response time distribution — 10 μs single-client and 0.551 ms @ 5.67M RPS (5.3x lower latency than Redis).",
       badge: "10 μs Latency",
       image: benchmarkLatency,
-      stats: "Kvllay: 0.010 ms (10 μs) single / 0.567 ms (P=64) • Redis 8.x: 0.013 ms (13 μs) single / 2.359 ms (P=64)",
+      stats: "Kvllay: 0.010 ms (10 μs) single / 0.551 ms (P=64) • Redis 8.x: 0.013 ms (13 μs) single / 2.951 ms (P=64)",
     },
   ]
 
@@ -78,8 +78,8 @@ export function Comparison() {
     {
       icon: IconGauge,
       title: "Sub-Millisecond & Fast",
-      desc: "Guaranteed p50 latency down to 0.010 ms (10 μs) on single-client and 0.19 ms on pipelined workloads, delivering up to 5.49M RPS (~5x speedup over Redis).",
-      badgeHighlight: "5.49M req/s",
+      desc: "Guaranteed p50 latency down to 0.010 ms (10 μs) on single-client and 0.55 ms on pipelined workloads, delivering up to 5.67M RPS (~5x speedup over Redis).",
+      badgeHighlight: "5.67M req/s",
       badgeText: "pipelined throughput",
     },
     {
@@ -118,9 +118,9 @@ export function Comparison() {
     },
     {
       metric: "Pipelined GET (P=64, 100 clients)",
-      kvllay: "5,494,505 req/s",
+      kvllay: "5,665,723 req/s",
       redis: "2,531,645 req/s",
-      result: "2.17x Faster (+117% / ~5x baseline)",
+      result: "2.24x Faster (+124% / ~5x baseline)",
     },
     {
       metric: "Pipelined GET (P=32, 50 clients)",
@@ -130,9 +130,9 @@ export function Comparison() {
     },
     {
       metric: "Pipelined SET (P=32, 50 clients)",
-      kvllay: "2,840,909 req/s",
+      kvllay: "3,257,329 req/s",
       redis: "1,488,095 req/s",
-      result: "1.91x Faster (+90.9%)",
+      result: "2.19x Faster (+119%)",
     },
     {
       metric: "Concurrent Workers (50 clients) INCR",
@@ -142,9 +142,9 @@ export function Comparison() {
     },
     {
       metric: "Response Latency p50 (P=64)",
-      kvllay: "0.567 ms",
+      kvllay: "0.551 ms",
       redis: "2.359 ms",
-      result: "4.2x lower latency than Redis",
+      result: "4.3x lower latency than Redis",
     },
     {
       metric: "Response Latency p50 (Single-Client)",

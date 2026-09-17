@@ -50,7 +50,7 @@ export function Hero() {
 
       <Reveal direction="up" delay={240}>
         <p className="text-sm sm:text-base lg:text-lg text-[#8B9BB4] max-w-[660px] leading-relaxed mb-7 sm:mb-9 px-1">
-          A drop-in Redis RESP2 replacement written in modern C++17. Up to 5.49M req/s throughput, 87x smaller Docker image, 3.7x lighter RAM, and 100% native RESP2 compatibility.
+          A drop-in Redis RESP2 replacement written in modern C++17. Up to 5.67M req/s throughput, 87x smaller Docker image, 3.7x lighter RAM, and 100% native RESP2 compatibility.
         </p>
       </Reveal>
 

@@ -95,14 +95,19 @@ inline bool set_socket_nonblocking(socket_t fd) {
 #endif
 }
 
+inline std::atomic<uint64_t> g_next_client_id{1};
+
 struct Connection {
     socket_t fd = INVALID_SOCKET;
     bool authenticated = false;
+    ClientSession client;
     std::string read_buf;
     size_t read_offset = 0;
     std::string write_buf;
     size_t write_offset = 0;
     bool should_close = false;
+    bool in_transaction = false;
+    std::vector<std::vector<std::string>> transaction_queue;
 };
 
 class WorkerEventLoop {
@@ -188,6 +193,7 @@ public:
 #endif
 
         for (auto& pair : connections_) {
+            command_handler_.unregister_client(pair.second.client.id);
             CLOSE_SOCKET(pair.first);
         }
         connections_.clear();
@@ -260,6 +266,7 @@ private:
 
         for (const auto& item : to_add) {
             set_socket_nonblocking(item.fd);
+            uint64_t client_id = g_next_client_id.fetch_add(1, std::memory_order_relaxed);
 #ifndef _WIN32
             epoll_event ev{};
             ev.events = EPOLLIN | EPOLLRDHUP;
@@ -268,8 +275,10 @@ private:
                 Connection conn;
                 conn.fd = item.fd;
                 conn.authenticated = item.authenticated;
+                conn.client.id = client_id;
                 conn.read_buf.reserve(constants::CLIENT_BUFFER_SIZE);
                 connections_.emplace(item.fd, std::move(conn));
+                command_handler_.register_client(connections_.at(item.fd).client);
             } else {
                 CLOSE_SOCKET(item.fd);
             }
@@ -277,8 +286,10 @@ private:
             Connection conn;
             conn.fd = item.fd;
             conn.authenticated = item.authenticated;
+            conn.client.id = client_id;
             conn.read_buf.reserve(constants::CLIENT_BUFFER_SIZE);
             connections_.emplace(item.fd, std::move(conn));
+            command_handler_.register_client(connections_.at(item.fd).client);
 #endif
         }
     }
@@ -307,6 +318,10 @@ private:
 #ifndef _WIN32
         epoll_ctl(epoll_fd_, EPOLL_CTL_DEL, fd, nullptr);
 #endif
+        auto it = connections_.find(fd);
+        if (it != connections_.end()) {
+            command_handler_.unregister_client(it->second.client.id);
+        }
         CLOSE_SOCKET(fd);
         connections_.erase(fd);
     }
@@ -338,6 +353,104 @@ private:
         conn.write_offset = 0;
         set_write_interest(conn.fd, false);
         return true;
+    }
+
+    static bool is_command(std::string_view command, std::string_view expected) {
+        return CommandHandler::iequals(command, expected);
+    }
+
+    void dispatch_connection_command(Connection& conn,
+                                     const std::vector<std::string_view>& args,
+                                     std::string& out) {
+        if (args.empty()) {
+            Resp::append_error(out, "empty command");
+            return;
+        }
+
+        const std::string_view command = args[0];
+
+        if (is_command(command, "QUIT")) {
+            Resp::append_ok(out);
+            conn.should_close = true;
+            conn.in_transaction = false;
+            conn.transaction_queue.clear();
+            return;
+        }
+
+        // Authentication is checked before transaction handling. AUTH and HELLO
+        // must remain usable before MULTI, while all other commands are rejected.
+        if (!password_.empty() && !conn.authenticated &&
+            !is_command(command, "AUTH") && !is_command(command, "HELLO")) {
+            Resp::append_error(out, "NOAUTH Authentication required.");
+            return;
+        }
+
+        if (is_command(command, "MULTI")) {
+            if (args.size() != 1) {
+                Resp::append_error(out, "wrong number of arguments for 'multi' command");
+            } else if (conn.in_transaction) {
+                Resp::append_error(out, "MULTI calls can not be nested");
+            } else {
+                conn.in_transaction = true;
+                conn.transaction_queue.clear();
+                Resp::append_ok(out);
+            }
+            return;
+        }
+
+        if (is_command(command, "DISCARD")) {
+            if (args.size() != 1) {
+                Resp::append_error(out, "wrong number of arguments for 'discard' command");
+            } else if (!conn.in_transaction) {
+                Resp::append_error(out, "DISCARD without MULTI");
+            } else {
+                conn.in_transaction = false;
+                conn.transaction_queue.clear();
+                Resp::append_ok(out);
+            }
+            return;
+        }
+
+        if (is_command(command, "EXEC")) {
+            if (args.size() != 1) {
+                Resp::append_error(out, "wrong number of arguments for 'exec' command");
+            } else if (!conn.in_transaction) {
+                Resp::append_error(out, "EXEC without MULTI");
+            } else {
+                conn.in_transaction = false;
+                Resp::append_array_header(out, conn.transaction_queue.size());
+                for (const auto& queued : conn.transaction_queue) {
+                    scratch_args_.clear();
+                    scratch_args_.reserve(queued.size());
+                    for (const auto& argument : queued) {
+                        scratch_args_.emplace_back(argument);
+                    }
+                    command_handler_.dispatch(scratch_args_, out, conn.authenticated,
+                                              password_, conn.should_close, conn.client);
+                }
+                conn.transaction_queue.clear();
+            }
+            return;
+        }
+
+        if (conn.in_transaction) {
+            constexpr size_t MAX_QUEUED_COMMANDS = 32768;
+            if (conn.transaction_queue.size() >= MAX_QUEUED_COMMANDS) {
+                Resp::append_error(out, "ERR transaction queue limit reached");
+                return;
+            }
+            std::vector<std::string> queued;
+            queued.reserve(args.size());
+            for (const auto argument : args) {
+                queued.emplace_back(argument);
+            }
+            conn.transaction_queue.emplace_back(std::move(queued));
+            Resp::append_simple_string(out, "QUEUED");
+            return;
+        }
+
+        command_handler_.dispatch(args, out, conn.authenticated, password_,
+                                   conn.should_close, conn.client);
     }
 
     bool handle_read(Connection& conn) {
@@ -376,7 +489,7 @@ private:
             ParseStatus status = Resp::parse_command(sv, scratch_args_, consumed, scratch_unescape_buf_);
             if (status == ParseStatus::Success) {
                 conn.read_offset += consumed;
-                command_handler_.dispatch(scratch_args_, scratch_out_batch_, conn.authenticated, password_, conn.should_close);
+                dispatch_connection_command(conn, scratch_args_, scratch_out_batch_);
                 if (conn.should_close) {
                     break;
                 }

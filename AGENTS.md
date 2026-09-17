@@ -23,6 +23,8 @@
 ├── src/
 │   ├── main.cpp            # Entry point, CLI argument parsing, server bootstrap
 │   └── resources.rc        # Windows PE resource script with application icon
+├── scripts/
+│   └── release.sh          # Git tag and release automation script
 ├── logo.ico                # Multi-resolution icon for Windows executable
 ├── logo.png                # High-resolution (256x256) logo
 ├── logo-16x16.png         # Pixel-art (16x16) source logo
@@ -87,7 +89,7 @@
 - **Current Implemented Commands**:
   - `AUTH [username] password`: Authenticates connection. Accepts optional username for Redis 6+ compatibility. Returns `-WRONGPASS ...` on mismatch.
   - `PING [message]`: Returns `+PONG\r\n` or the message as bulk string.
-  - `SET key value`: Sets string value, returns `+OK\r\n`.
+  - `SET key value [EX seconds|PX milliseconds] [NX|XX] [KEEPTTL]`: Sets a string value with optional expiration, conditional creation/update, or TTL preservation. Returns `+OK\r\n`, or `$-1\r\n` when `NX`/`XX` is not satisfied.
   - `GET key`: Returns bulk string or null bulk string (`$-1\r\n`).
   - `DEL key [key ...]`: Deletes keys, returns integer count of removed keys.
   - `EXISTS key [key ...]`: Returns integer count of existing keys.
@@ -117,12 +119,17 @@
   - `LRANGE key start stop`: Returns elements from start to stop (supports negative indexes).
   - `LINDEX key index`: Returns element by 0-based or negative index.
   - `TYPE key`: Returns type of key (`string`, `list`, or `none`).
+  - `SELECT index`: Selects logical database (supports default DB 0, returns `-ERR DB index is out of range` for out-of-range indexes).
   - `CONFIG GET parameter`: Retrieves configuration parameter (`maxmemory`, `maxmemory-policy`, or `*`).
   - `CONFIG SET parameter value`: Dynamically sets configuration (`maxmemory`, `maxmemory-policy`).
   - `SAVE`: Synchronously dumps memory state to binary snapshot file (`dump.kvl`).
   - `BGSAVE`: Asynchronously dumps memory state to snapshot in a background thread without `fork()`.
   - `LASTSAVE`: Returns UNIX epoch timestamp of the most recent successful snapshot save.
   - `BGREWRITEAOF`: Compacts and rewrites AOF log in background from current in-memory state without `fork()`.
+
+  - `MULTI`: Starts a transaction on the current connection; subsequent commands return `QUEUED`.
+  - `EXEC`: Executes the queued commands in FIFO order and returns a RESP array of their results.
+  - `DISCARD`: Clears the current connection's transaction queue.
 
 ### 4. Binary Snapshot Engine (`include/kvllay/snapshot.hpp`)
 - **Class**: `kvllay::SnapshotManager`
@@ -190,6 +197,7 @@
 - `make compile MALLOC=mimalloc` or `make compile-mimalloc`: Compiles with high-performance `mimalloc`.
 - `make run`: Compiles and runs binary with default settings (`0.0.0.0:6379`).
 - `make clean`: Removes binary from `build/`.
+- `make release`: Interactive release tagging and GitHub push (or `make release VERSION=v1.0.0`).
 
 ### Manual Compilation
 ```bash
@@ -266,3 +274,4 @@ When modifying or expanding `kvllay`, adhere to the following architecture patte
 - **Namespace**: All core types are inside `namespace kvllay`.
 - **Thread Safety**: Storage modifications MUST synchronize via `mutex_` in `Store`. Handlers and network layers must not bypass the storage mutex.
 - **Protocol Precision**: All responses must strictly adhere to the Redis RESP2 format (`\r\n` line endings, valid integer formats, null representation).
+- **Transaction State**: Transaction queues are connection-local and must never be stored in the shared `CommandHandler`; ordinary pipelining outside `MULTI` must continue to preserve FIFO response order.

@@ -75,10 +75,11 @@ public:
           save_changes_(save_changes),
           last_save_time_(static_cast<uint64_t>(time(nullptr))),
           saving_in_progress_(false),
-          auto_save_running_(false) {}
+          auto_save_running_(false),
+          save_shutdown_(false) {}
 
     ~SnapshotManager() {
-        stop_auto_save();
+        stop();
     }
 
     SnapshotManager(const SnapshotManager&) = delete;
@@ -111,6 +112,11 @@ public:
 
     bool save_sync(const Store& store, const std::string& filepath = "") {
         std::string target = filepath.empty() ? snapshot_path_ : filepath;
+        // Serialize the complete operation with lifecycle changes.  In
+        // particular, stop() must not return while this call still uses
+        // SnapshotManager's state.
+        std::lock_guard<std::mutex> lock(save_thread_mutex_);
+
         bool expected = false;
         if (!saving_in_progress_.compare_exchange_strong(expected, true)) {
             return false;
@@ -123,17 +129,42 @@ public:
 
     bool save_async(const Store& store, const std::string& filepath = "") {
         std::string target = filepath.empty() ? snapshot_path_ : filepath;
+        // Keep the lifecycle lock while taking the point-in-time copy and
+        // installing the worker.  This prevents stop() from destroying the
+        // manager between those two operations.
+        std::lock_guard<std::mutex> lock(save_thread_mutex_);
+
         bool expected = false;
         if (!saving_in_progress_.compare_exchange_strong(expected, true)) {
             return false;
         }
 
+        // A completed std::thread remains joinable until it is collected.
+        // Reap it before reusing the member, otherwise assigning a new
+        // thread to save_thread_ would call std::terminate().
+        std::thread previous;
+        if (save_shutdown_) {
+            saving_in_progress_.store(false);
+            return false;
+        }
+
         auto entries = store.get_all_entries();
 
-        std::thread([this, entries = std::move(entries), target]() mutable {
+        if (save_thread_.joinable()) {
+            previous = std::move(save_thread_);
+        }
+
+        save_thread_ = std::thread([this, entries = std::move(entries), target]() mutable {
             perform_save(entries, target);
             saving_in_progress_.store(false);
-        }).detach();
+        });
+
+        // The previous save has already cleared saving_in_progress_, so it
+        // cannot still be writing.  Join it after installing the new worker;
+        // the local thread handle keeps ownership during this transition.
+        if (previous.joinable()) {
+            previous.join();
+        }
 
         return true;
     }
@@ -286,7 +317,12 @@ public:
     }
 
     void start_auto_save(Store& store) {
-        if (save_interval_secs_ == 0 || auto_save_running_.exchange(true)) {
+        if (save_interval_secs_ == 0) {
+            return;
+        }
+
+        std::lock_guard<std::mutex> thread_lock(auto_save_thread_mutex_);
+        if (auto_save_running_.exchange(true)) {
             return;
         }
 
@@ -313,12 +349,34 @@ public:
     }
 
     void stop_auto_save() {
-        if (!auto_save_running_.exchange(false)) {
-            return;
-        }
+        // Keep the thread lifecycle lock until join completes.  This also
+        // prevents a concurrent start_auto_save() from reviving a worker
+        // before the old worker has exited.
+        std::lock_guard<std::mutex> thread_lock(auto_save_thread_mutex_);
+        auto_save_running_.store(false);
         auto_save_cv_.notify_all();
         if (auto_save_thread_.joinable()) {
             auto_save_thread_.join();
+        }
+    }
+
+    // Stops all background snapshot activity.  The save thread is joined even
+    // when it has already finished, because a finished std::thread is still
+    // joinable and must be collected before this object is destroyed.
+    void stop() {
+        stop_auto_save();
+
+        std::thread save_thread;
+        {
+            std::lock_guard<std::mutex> lock(save_thread_mutex_);
+            save_shutdown_ = true;
+            if (save_thread_.joinable()) {
+                save_thread = std::move(save_thread_);
+            }
+        }
+
+        if (save_thread.joinable()) {
+            save_thread.join();
         }
     }
 
@@ -452,8 +510,13 @@ private:
 
     std::atomic<bool> auto_save_running_;
     std::thread auto_save_thread_;
+    std::mutex auto_save_thread_mutex_;
     std::mutex auto_save_cv_mutex_;
     std::condition_variable auto_save_cv_;
+
+    std::mutex save_thread_mutex_;
+    std::thread save_thread_;
+    bool save_shutdown_;
 };
 
 }

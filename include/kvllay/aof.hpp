@@ -14,6 +14,7 @@
 #include <condition_variable>
 #include <algorithm>
 #include <cstdint>
+#include <limits>
 #include <cstdio>
 #include <constants.hpp>
 #include <resp.hpp>
@@ -113,8 +114,18 @@ public:
             return true;
         }
 
-        file_handle_ = fopen(aof_path_.c_str(), "ab");
-        if (!file_handle_) {
+        std::lock_guard<std::mutex> lifecycle_lock(lifecycle_mutex_);
+        if (running_) {
+            return true;
+        }
+
+        bool opened = false;
+        {
+            std::lock_guard<std::mutex> lock(file_mutex_);
+            file_handle_ = fopen(aof_path_.c_str(), "ab");
+            opened = file_handle_ != nullptr;
+        }
+        if (!opened) {
             std::cerr << "[kvllay] Failed to open AOF file " << aof_path_ << std::endl;
             return false;
         }
@@ -125,6 +136,7 @@ public:
     }
 
     void stop() {
+        std::lock_guard<std::mutex> lifecycle_lock(lifecycle_mutex_);
         if (!running_.exchange(false)) {
             return;
         }
@@ -138,12 +150,24 @@ public:
             writer_thread_.join();
         }
 
+        // A rewrite uses this object and may replace file_handle_.  It must
+        // finish before the manager (and its FILE*) can be destroyed.
+        {
+            std::lock_guard<std::mutex> lock(rewrite_mutex_);
+            if (rewrite_thread_.joinable()) {
+                rewrite_thread_.join();
+            }
+        }
+
         flush_sync();
 
-        if (file_handle_) {
-            sync_file();
-            fclose(file_handle_);
-            file_handle_ = nullptr;
+        {
+            std::lock_guard<std::mutex> file_lock(file_mutex_);
+            if (file_handle_) {
+                sync_file_locked();
+                fclose(file_handle_);
+                file_handle_ = nullptr;
+            }
         }
     }
 
@@ -251,10 +275,25 @@ public:
 
         auto entries = store.get_all_entries();
 
-        std::thread([this, entries = std::move(entries)]() mutable {
-            perform_rewrite(entries);
-            rewrite_in_progress_.store(false);
-        }).detach();
+        {
+            std::lock_guard<std::mutex> lock(rewrite_mutex_);
+            if (!running_) {
+                rewrite_in_progress_.store(false);
+                return false;
+            }
+
+            // A completed rewrite remains joinable until it is collected.
+            // Reap it before starting the next rewrite.
+            if (rewrite_thread_.joinable()) {
+                std::thread previous = std::move(rewrite_thread_);
+                previous.join();
+            }
+
+            rewrite_thread_ = std::thread([this, entries = std::move(entries)]() mutable {
+                perform_rewrite(entries);
+                rewrite_in_progress_.store(false);
+            });
+        }
 
         return true;
     }
@@ -273,6 +312,9 @@ private:
                 }
             }
 
+            // Write flushing_buffer_ and perform periodic fsync under file_mutex_ without
+            // holding buffer_mutex_. This ensures client mutating commands are never stalled by disk I/O!
+            std::lock_guard<std::mutex> file_lock(file_mutex_);
             if (!flushing_buffer_.empty() && file_handle_) {
                 fwrite(flushing_buffer_.data(), 1, flushing_buffer_.size(), file_handle_);
                 fflush(file_handle_);
@@ -282,7 +324,7 @@ private:
             if (fsync_policy_ == FsyncPolicy::EverySec && file_handle_) {
                 auto now = std::chrono::steady_clock::now();
                 if (now - last_fsync_time_ >= std::chrono::seconds(1)) {
-                    sync_file();
+                    sync_file_locked();
                     last_fsync_time_ = now;
                 }
             }
@@ -290,24 +332,30 @@ private:
     }
 
     void flush_sync() {
-        std::lock_guard<std::mutex> lock(buffer_mutex_);
-        if (!active_buffer_.empty() && file_handle_) {
-            fwrite(active_buffer_.data(), 1, active_buffer_.size(), file_handle_);
-            active_buffer_.clear();
-        }
-        if (!flushing_buffer_.empty() && file_handle_) {
-            fwrite(flushing_buffer_.data(), 1, flushing_buffer_.size(), file_handle_);
-            flushing_buffer_.clear();
+        std::lock_guard<std::mutex> file_lock(file_mutex_);
+        {
+            std::lock_guard<std::mutex> lock(buffer_mutex_);
+            if (!active_buffer_.empty() && file_handle_) {
+                fwrite(active_buffer_.data(), 1, active_buffer_.size(), file_handle_);
+                active_buffer_.clear();
+            }
+            if (!flushing_buffer_.empty() && file_handle_) {
+                fwrite(flushing_buffer_.data(), 1, flushing_buffer_.size(), file_handle_);
+                flushing_buffer_.clear();
+            }
         }
         if (file_handle_) {
             fflush(file_handle_);
             if (fsync_policy_ == FsyncPolicy::Always || fsync_policy_ == FsyncPolicy::EverySec) {
-                sync_file();
+                sync_file_locked();
             }
         }
     }
 
-    void sync_file() {
+    // Must be called while file_mutex_ is held. Keeping the FILE* lifetime
+    // and every stdio operation under file_mutex_ prevents rewrite from
+    // closing the stream while another thread is using it.
+    void sync_file_locked() {
         if (!file_handle_) return;
 #ifdef _WIN32
         int fd = _fileno(file_handle_);
@@ -343,10 +391,9 @@ private:
                 if (entry.expire_at_epoch_ms == 0) {
                     serialized = Resp::array({"SET", entry.key, entry.string_val});
                 } else if (entry.expire_at_epoch_ms > now_wall) {
-                    uint64_t rem_ms = entry.expire_at_epoch_ms - now_wall;
-                    uint64_t rem_sec = (rem_ms + 999) / 1000;
-                    if (rem_sec == 0) rem_sec = 1;
-                    serialized = Resp::array({"SETEX", entry.key, std::to_string(rem_sec), entry.string_val});
+                    serialized = Resp::array({"SET", entry.key, entry.string_val});
+                    serialized += Resp::array({"PEXPIREAT", entry.key,
+                                               std::to_string(entry.expire_at_epoch_ms)});
                 } else {
                     continue;
                 }
@@ -364,8 +411,8 @@ private:
                 }
                 serialized = Resp::array(rpush_args);
                 if (entry.expire_at_epoch_ms > now_wall) {
-                    uint64_t rem_ms = entry.expire_at_epoch_ms - now_wall;
-                    serialized += Resp::array({"PEXPIRE", entry.key, std::to_string(rem_ms)});
+                    serialized += Resp::array({"PEXPIREAT", entry.key,
+                                               std::to_string(entry.expire_at_epoch_ms)});
                 }
             } else {
                 continue;
@@ -381,15 +428,18 @@ private:
         fflush(tmp_fp);
 
         {
-            std::lock_guard<std::mutex> lock(buffer_mutex_);
+            std::lock_guard<std::mutex> file_lock(file_mutex_);
 
-            if (!flushing_buffer_.empty()) {
-                fwrite(flushing_buffer_.data(), 1, flushing_buffer_.size(), tmp_fp);
-                flushing_buffer_.clear();
-            }
-            if (!active_buffer_.empty()) {
-                fwrite(active_buffer_.data(), 1, active_buffer_.size(), tmp_fp);
-                active_buffer_.clear();
+            {
+                std::lock_guard<std::mutex> lock(buffer_mutex_);
+                if (!flushing_buffer_.empty()) {
+                    fwrite(flushing_buffer_.data(), 1, flushing_buffer_.size(), tmp_fp);
+                    flushing_buffer_.clear();
+                }
+                if (!active_buffer_.empty()) {
+                    fwrite(active_buffer_.data(), 1, active_buffer_.size(), tmp_fp);
+                    active_buffer_.clear();
+                }
             }
 
             fflush(tmp_fp);
@@ -409,6 +459,7 @@ private:
 
             file_handle_ = fopen(aof_path_.c_str(), "ab");
         }
+
     }
 
     void replay_command(Store& store, const std::vector<std::string>& args) {
@@ -417,7 +468,57 @@ private:
         std::transform(cmd.begin(), cmd.end(), cmd.begin(), ::toupper);
 
         if (cmd == "SET" && args.size() >= 3) {
-            store.set(args[1], args[2]);
+            uint64_t ttl_ms = 0;
+            bool has_expiry = false;
+            bool keep_ttl = false;
+            bool nx = false;
+            bool xx = false;
+            bool valid = true;
+
+            for (size_t i = 3; i < args.size() && valid; ++i) {
+                std::string option = args[i];
+                std::transform(option.begin(), option.end(), option.begin(),
+                               [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+                if (option == "NX") {
+                    if (nx || xx) valid = false;
+                    nx = true;
+                } else if (option == "XX") {
+                    if (nx || xx) valid = false;
+                    xx = true;
+                } else if (option == "KEEPTTL") {
+                    if (keep_ttl) valid = false;
+                    keep_ttl = true;
+                } else if (option == "EX" || option == "PX") {
+                    if (has_expiry || i + 1 >= args.size()) {
+                        valid = false;
+                        break;
+                    }
+                    try {
+                        long long duration = std::stoll(args[++i]);
+                        if (duration <= 0) {
+                            valid = false;
+                            break;
+                        }
+                        ttl_ms = static_cast<uint64_t>(duration);
+                        if (option == "EX") {
+                            if (ttl_ms > std::numeric_limits<uint64_t>::max() / 1000) {
+                                valid = false;
+                                break;
+                            }
+                            ttl_ms *= 1000;
+                        }
+                        has_expiry = true;
+                    } catch (...) {
+                        valid = false;
+                    }
+                } else {
+                    valid = false;
+                }
+            }
+
+            if (valid && !(keep_ttl && has_expiry)) {
+                store.set_with_options(args[1], args[2], ttl_ms, keep_ttl, nx, xx);
+            }
         } else if (cmd == "SETEX" && args.size() >= 4) {
             try {
                 long long sec = std::stoll(args[2]);
@@ -437,6 +538,14 @@ private:
             try {
                 long long ms = std::stoll(args[2]);
                 store.expire(args[1], ms > 0 ? static_cast<uint64_t>(ms) : 0);
+            } catch (...) {}
+        } else if (cmd == "PEXPIREAT" && args.size() >= 3) {
+            try {
+                size_t parsed = 0;
+                uint64_t expire_at = std::stoull(args[2], &parsed);
+                if (parsed == args[2].size()) {
+                    store.expire_at(args[1], expire_at);
+                }
             } catch (...) {}
         } else if (cmd == "PERSIST" && args.size() >= 2) {
             store.persist(args[1]);
@@ -501,15 +610,24 @@ private:
     bool enabled_;
     FsyncPolicy fsync_policy_;
     FILE* file_handle_;
+    std::mutex file_mutex_;
+
+    std::mutex lifecycle_mutex_;
 
     std::string active_buffer_;
     std::string flushing_buffer_;
     std::mutex buffer_mutex_;
     std::condition_variable cv_;
 
+    // Protects the lifetime of the rewrite thread.  The operation still
+    // serializes FILE*/buffer access through buffer_mutex_, while stop() joins
+    // this thread before destroying the manager underneath it.
+    std::mutex rewrite_mutex_;
+
     std::atomic<bool> running_;
     std::atomic<bool> rewrite_in_progress_;
     std::thread writer_thread_;
+    std::thread rewrite_thread_;
     std::chrono::steady_clock::time_point last_fsync_time_;
 };
 

@@ -8,6 +8,8 @@
 #include <vector>
 #include <thread>
 #include <atomic>
+#include <chrono>
+#include <csignal>
 #include <cstring>
 #include <constants.hpp>
 #include <resp.hpp>
@@ -32,6 +34,8 @@
     #define IS_VALID_SOCKET(s) ((s) != INVALID_SOCKET)
     #define CLOSE_SOCKET(s) closesocket(s)
 #else
+    #include <poll.h>
+    #include <signal.h>
     #include <sys/types.h>
     #include <sys/socket.h>
     #include <netinet/in.h>
@@ -46,6 +50,51 @@
 #endif
 
 namespace kvllay {
+
+// Signal handlers may only perform async-signal-safe operations.  The handler
+// therefore sets a sig_atomic_t flag and leaves all shutdown work to the main
+// server loop.
+namespace shutdown_signal {
+
+inline volatile std::sig_atomic_t requested = 0;
+
+inline void handler(int) noexcept {
+    requested = 1;
+}
+
+#ifdef _WIN32
+inline BOOL WINAPI console_ctrl_handler(DWORD ctrl_type) {
+    if (ctrl_type == CTRL_C_EVENT || ctrl_type == CTRL_BREAK_EVENT ||
+        ctrl_type == CTRL_CLOSE_EVENT || ctrl_type == CTRL_SHUTDOWN_EVENT) {
+        requested = 1;
+        return TRUE;
+    }
+    return FALSE;
+}
+#endif
+
+inline void install() noexcept {
+    requested = 0;
+
+#ifdef _WIN32
+    SetConsoleCtrlHandler(console_ctrl_handler, TRUE);
+    std::signal(SIGINT, handler);
+    #ifdef SIGTERM
+    std::signal(SIGTERM, handler);
+    #endif
+#else
+    struct sigaction action{};
+    sigemptyset(&action.sa_mask);
+    action.sa_handler = handler;
+    // Deliberately do not use SA_RESTART: if a platform still blocks in a
+    // socket call, SIGINT/SIGTERM must be allowed to wake it up.
+    action.sa_flags = 0;
+    sigaction(SIGINT, &action, nullptr);
+    sigaction(SIGTERM, &action, nullptr);
+#endif
+}
+
+} // namespace shutdown_signal
 
 struct ServerConfig {
     int port = constants::DEFAULT_PORT;
@@ -156,6 +205,13 @@ public:
             return false;
         }
 
+        if (!set_socket_nonblocking(server_socket_)) {
+            std::cerr << "[kvllay] Failed to make listening socket non-blocking" << std::endl;
+            CLOSE_SOCKET(server_socket_);
+            server_socket_ = INVALID_SOCKET;
+            return false;
+        }
+
         running_ = true;
         std::cout << "[kvllay] Server started on " << config_.host << ":" << config_.port;
         if (!config_.password.empty()) {
@@ -167,6 +223,8 @@ public:
     }
 
     void run() {
+        shutdown_signal::install();
+
         if (!running_ && !start()) {
             return;
         }
@@ -174,33 +232,82 @@ public:
         worker_pool_.start();
 
         while (running_) {
-            sockaddr_in client_addr{};
-            socklen_t client_len = sizeof(client_addr);
-            socket_t client_socket = accept(server_socket_, (sockaddr*)&client_addr, &client_len);
+            if (shutdown_signal::requested) {
+                std::cout << "[kvllay] Shutdown signal received, stopping gracefully" << std::endl;
+                break;
+            }
 
-            if (!IS_VALID_SOCKET(client_socket)) {
-                if (running_) {
-                    int err = SOCKET_ERRNO;
-                    if (err == ERR_INTR) continue;
+#ifdef _WIN32
+            WSAPOLLFD pfd{};
+            pfd.fd = server_socket_;
+            pfd.events = POLLIN;
+            int poll_ret = WSAPoll(&pfd, 1, 100);
+#else
+            struct pollfd pfd{};
+            pfd.fd = server_socket_;
+            pfd.events = POLLIN;
+            int poll_ret = poll(&pfd, 1, 100);
+#endif
+
+            if (poll_ret < 0) {
+                int err = SOCKET_ERRNO;
+                if (err == ERR_INTR) {
+                    continue;
                 }
+                if (running_) {
+                    std::cerr << "[kvllay] poll() failed on listening socket" << std::endl;
+                }
+                break;
+            }
+
+            if (poll_ret == 0 || !(pfd.revents & POLLIN)) {
                 continue;
             }
 
-            int nodelay = 1;
+            while (running_) {
+                sockaddr_in client_addr{};
+                socklen_t client_len = sizeof(client_addr);
+                socket_t client_socket = accept(server_socket_, (sockaddr*)&client_addr, &client_len);
+
+                if (!IS_VALID_SOCKET(client_socket)) {
+                    int err = SOCKET_ERRNO;
+                    if (err == ERR_INTR) {
+                        continue;
+                    }
+                    if (err == ERR_AGAIN
+#ifndef _WIN32
+                        || err == EWOULDBLOCK
+#endif
+                    ) {
+                        break;
+                    }
+
+                    if (running_) {
+                        std::cerr << "[kvllay] accept() failed" << std::endl;
+                    }
+                    break;
+                }
+
+                int nodelay = 1;
 #ifdef _WIN32
-            setsockopt(client_socket, IPPROTO_TCP, TCP_NODELAY, (const char*)&nodelay, sizeof(nodelay));
-            int bufsize = 262144;
-            setsockopt(client_socket, SOL_SOCKET, SO_RCVBUF, (const char*)&bufsize, sizeof(bufsize));
-            setsockopt(client_socket, SOL_SOCKET, SO_SNDBUF, (const char*)&bufsize, sizeof(bufsize));
+                setsockopt(client_socket, IPPROTO_TCP, TCP_NODELAY, (const char*)&nodelay, sizeof(nodelay));
+                int bufsize = 262144;
+                setsockopt(client_socket, SOL_SOCKET, SO_RCVBUF, (const char*)&bufsize, sizeof(bufsize));
+                setsockopt(client_socket, SOL_SOCKET, SO_SNDBUF, (const char*)&bufsize, sizeof(bufsize));
 #else
-            setsockopt(client_socket, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
-            int bufsize = 262144;
-            setsockopt(client_socket, SOL_SOCKET, SO_RCVBUF, &bufsize, sizeof(bufsize));
-            setsockopt(client_socket, SOL_SOCKET, SO_SNDBUF, &bufsize, sizeof(bufsize));
+                setsockopt(client_socket, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
+                int bufsize = 262144;
+                setsockopt(client_socket, SOL_SOCKET, SO_RCVBUF, &bufsize, sizeof(bufsize));
+                setsockopt(client_socket, SOL_SOCKET, SO_SNDBUF, &bufsize, sizeof(bufsize));
 #endif
 
-            worker_pool_.dispatch_connection(client_socket, config_.password.empty());
+                worker_pool_.dispatch_connection(client_socket, config_.password.empty());
+            }
         }
+
+        // stop() is idempotent, so this also covers an external stop() call
+        // racing with the accept loop.
+        stop();
     }
 
     void stop() {
@@ -221,7 +328,7 @@ public:
         worker_pool_.stop();
 
         if (config_.snapshot_enabled) {
-            snapshot_mgr_.stop_auto_save();
+            snapshot_mgr_.stop();
             if (store_.dirty_count() > 0) {
                 snapshot_mgr_.save_sync(store_);
             }

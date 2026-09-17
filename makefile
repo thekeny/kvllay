@@ -87,11 +87,22 @@ static-windows:
 run:
 	${RUN}
 
+PYTHON ?= $(shell if [ -f .venv/bin/python3 ]; then echo .venv/bin/python3; else echo python3; fi)
+
 test:
-	python3 test_kvllay.py 6389
+	$(PYTHON) test_kvllay.py 6389
+
+test-redis-py:
+	$(PYTHON) test_redis_py.py 6389
 
 clean:
 	$(REMOVE)
+
+render-benchmarks:
+	$(PYTHON) docs/images/render_benchmarks.py
+
+release:
+	@bash scripts/release.sh $(VERSION)
 
 docker-build:
 	docker build -t kenyka/kvllay:latest .
@@ -104,4 +115,6 @@ docker-compose-up:
 
 docker-compose-down:
 	docker compose down
+
+.PHONY: default compile compile-jemalloc compile-mimalloc static-linux static-windows run test clean release docker-build docker-run docker-compose-up docker-compose-down
 
