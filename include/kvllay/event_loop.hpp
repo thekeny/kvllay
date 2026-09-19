@@ -98,6 +98,11 @@ inline bool set_socket_nonblocking(socket_t fd) {
 inline std::atomic<uint64_t> g_next_client_id{1};
 
 struct Connection {
+    struct AsyncState {
+        std::mutex mutex;
+        std::string pending;
+    };
+
     socket_t fd = INVALID_SOCKET;
     bool authenticated = false;
     ClientSession client;
@@ -106,8 +111,10 @@ struct Connection {
     std::string write_buf;
     size_t write_offset = 0;
     bool should_close = false;
+    bool is_blocked = false;
     bool in_transaction = false;
     std::vector<std::vector<std::string>> transaction_queue;
+    std::shared_ptr<AsyncState> async_state = std::make_shared<AsyncState>();
 };
 
 class WorkerEventLoop {
@@ -278,7 +285,16 @@ private:
                 conn.client.id = client_id;
                 conn.read_buf.reserve(constants::CLIENT_BUFFER_SIZE);
                 connections_.emplace(item.fd, std::move(conn));
-                command_handler_.register_client(connections_.at(item.fd).client);
+                auto& registered = connections_.at(item.fd);
+                command_handler_.register_client(registered.client);
+                auto state = registered.async_state;
+                command_handler_.set_client_sink(registered.client.id, [this, state](std::string message) {
+                    {
+                        std::lock_guard<std::mutex> lock(state->mutex);
+                        state->pending.append(message);
+                    }
+                    wakeup();
+                });
             } else {
                 CLOSE_SOCKET(item.fd);
             }
@@ -289,8 +305,36 @@ private:
             conn.client.id = client_id;
             conn.read_buf.reserve(constants::CLIENT_BUFFER_SIZE);
             connections_.emplace(item.fd, std::move(conn));
-            command_handler_.register_client(connections_.at(item.fd).client);
+            auto& registered = connections_.at(item.fd);
+            command_handler_.register_client(registered.client);
+            auto state = registered.async_state;
+            command_handler_.set_client_sink(registered.client.id, [this, state](std::string message) {
+                {
+                    std::lock_guard<std::mutex> lock(state->mutex);
+                    state->pending.append(message);
+                }
+            });
 #endif
+        }
+    }
+
+    void process_async_messages() {
+        for (auto& pair : connections_) {
+            Connection& conn = pair.second;
+            std::string pending;
+            {
+                std::lock_guard<std::mutex> lock(conn.async_state->mutex);
+                if (conn.async_state->pending.empty()) continue;
+                pending.swap(conn.async_state->pending);
+            }
+            conn.is_blocked = false;
+            if (conn.write_buf.empty()) {
+                conn.write_buf = std::move(pending);
+                conn.write_offset = 0;
+            } else {
+                conn.write_buf.append(pending);
+            }
+            set_write_interest(conn.fd, true);
         }
     }
 
@@ -450,7 +494,7 @@ private:
         }
 
         command_handler_.dispatch(args, out, conn.authenticated, password_,
-                                   conn.should_close, conn.client);
+                                   conn.should_close, conn.client, &conn.is_blocked);
     }
 
     bool handle_read(Connection& conn) {
@@ -481,6 +525,9 @@ private:
         scratch_out_batch_.clear();
 
         while (conn.read_offset < conn.read_buf.size()) {
+            if (conn.is_blocked) {
+                break;
+            }
             size_t consumed = 0;
             std::string_view sv(conn.read_buf.data() + conn.read_offset, conn.read_buf.size() - conn.read_offset);
             scratch_args_.clear();
@@ -490,7 +537,7 @@ private:
             if (status == ParseStatus::Success) {
                 conn.read_offset += consumed;
                 dispatch_connection_command(conn, scratch_args_, scratch_out_batch_);
-                if (conn.should_close) {
+                if (conn.should_close || conn.is_blocked) {
                     break;
                 }
             } else if (status == ParseStatus::Incomplete) {
@@ -561,6 +608,7 @@ private:
                     ssize_t r = ::read(wakeup_fd_, &val, sizeof(val));
                     (void)r;
                     process_pending();
+                    process_async_messages();
                     continue;
                 }
 
@@ -596,6 +644,7 @@ private:
             }
 
             process_pending();
+            process_async_messages();
         }
     }
 #else
@@ -604,6 +653,7 @@ private:
 
         while (running_) {
             process_pending();
+            process_async_messages();
 
             poll_fds.clear();
             poll_fds.reserve(connections_.size());

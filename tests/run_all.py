@@ -64,10 +64,14 @@ def run_all(port=6389):
     test_allocator_and_memory_optimization(port)
     try:
         from test_redis_py import test_redis_py
+        from test_redis_compat_extended import test_redis_compat_extended
+        from test_extended_persistence import test_extended_persistence
     except ImportError:
         print("[SKIP] redis-py is not installed")
     else:
         test_redis_py(port)
+        test_redis_compat_extended(port)
+        test_extended_persistence(port)
 
 
 if __name__ == "__main__":

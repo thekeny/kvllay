@@ -89,6 +89,15 @@ public:
         out.append(buf, ptr - buf);
     }
 
+    static inline void append_double(std::string& out, double val) {
+        char buf[64];
+        buf[0] = ',';
+        int len = std::snprintf(buf + 1, sizeof(buf) - 3, "%.17g", val);
+        buf[1 + len] = '\r';
+        buf[1 + len + 1] = '\n';
+        out.append(buf, len + 3);
+    }
+
     static inline void append_bulk_string(std::string& out, std::string_view val) {
         char buf[32];
         buf[0] = '$';
