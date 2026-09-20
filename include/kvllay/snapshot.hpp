@@ -306,6 +306,82 @@ public:
                     offset += sizeof(uint64_t);
 
                     store.restore_list_entry(key, elements, expire_at);
+                } else if (entry_type == static_cast<uint8_t>(Store::EntryType::Hash)) {
+                    if (offset + sizeof(uint32_t) > data_len) return false;
+                    uint32_t field_count = 0;
+                    std::memcpy(&field_count, buffer.data() + offset, sizeof(uint32_t));
+                    offset += sizeof(uint32_t);
+                    std::vector<std::pair<std::string, std::string>> fields;
+                    fields.reserve(field_count);
+                    for (uint32_t j = 0; j < field_count; ++j) {
+                        if (offset + sizeof(uint32_t) > data_len) return false;
+                        uint32_t field_len = 0;
+                        std::memcpy(&field_len, buffer.data() + offset, sizeof(uint32_t));
+                        offset += sizeof(uint32_t);
+                        if (offset + field_len > data_len) return false;
+                        std::string field(reinterpret_cast<char*>(buffer.data() + offset), field_len);
+                        offset += field_len;
+                        if (offset + sizeof(uint32_t) > data_len) return false;
+                        uint32_t value_len = 0;
+                        std::memcpy(&value_len, buffer.data() + offset, sizeof(uint32_t));
+                        offset += sizeof(uint32_t);
+                        if (offset + value_len > data_len) return false;
+                        std::string value(reinterpret_cast<char*>(buffer.data() + offset), value_len);
+                        offset += value_len;
+                        fields.emplace_back(std::move(field), std::move(value));
+                    }
+                    if (offset + sizeof(uint64_t) > data_len) return false;
+                    uint64_t expire_at = 0;
+                    std::memcpy(&expire_at, buffer.data() + offset, sizeof(uint64_t));
+                    offset += sizeof(uint64_t);
+                    store.restore_hash_entry(key, fields, expire_at);
+                } else if (entry_type == static_cast<uint8_t>(Store::EntryType::Set)) {
+                    if (offset + sizeof(uint32_t) > data_len) return false;
+                    uint32_t value_count = 0;
+                    std::memcpy(&value_count, buffer.data() + offset, sizeof(uint32_t));
+                    offset += sizeof(uint32_t);
+                    std::vector<std::string> values;
+                    values.reserve(value_count);
+                    for (uint32_t j = 0; j < value_count; ++j) {
+                        if (offset + sizeof(uint32_t) > data_len) return false;
+                        uint32_t value_len = 0;
+                        std::memcpy(&value_len, buffer.data() + offset, sizeof(uint32_t));
+                        offset += sizeof(uint32_t);
+                        if (offset + value_len > data_len) return false;
+                        values.emplace_back(reinterpret_cast<char*>(buffer.data() + offset), value_len);
+                        offset += value_len;
+                    }
+                    if (offset + sizeof(uint64_t) > data_len) return false;
+                    uint64_t expire_at = 0;
+                    std::memcpy(&expire_at, buffer.data() + offset, sizeof(uint64_t));
+                    offset += sizeof(uint64_t);
+                    store.restore_set_entry(key, values, expire_at);
+                } else if (entry_type == static_cast<uint8_t>(Store::EntryType::ZSet)) {
+                    if (offset + sizeof(uint32_t) > data_len) return false;
+                    uint32_t value_count = 0;
+                    std::memcpy(&value_count, buffer.data() + offset, sizeof(uint32_t));
+                    offset += sizeof(uint32_t);
+                    std::vector<std::pair<std::string, double>> values;
+                    values.reserve(value_count);
+                    for (uint32_t j = 0; j < value_count; ++j) {
+                        if (offset + sizeof(uint32_t) > data_len) return false;
+                        uint32_t value_len = 0;
+                        std::memcpy(&value_len, buffer.data() + offset, sizeof(uint32_t));
+                        offset += sizeof(uint32_t);
+                        if (offset + value_len > data_len) return false;
+                        std::string member(reinterpret_cast<char*>(buffer.data() + offset), value_len);
+                        offset += value_len;
+                        if (offset + sizeof(double) > data_len) return false;
+                        double score = 0;
+                        std::memcpy(&score, buffer.data() + offset, sizeof(double));
+                        offset += sizeof(double);
+                        values.emplace_back(std::move(member), score);
+                    }
+                    if (offset + sizeof(uint64_t) > data_len) return false;
+                    uint64_t expire_at = 0;
+                    std::memcpy(&expire_at, buffer.data() + offset, sizeof(uint64_t));
+                    offset += sizeof(uint64_t);
+                    store.restore_zset_entry(key, values, expire_at);
                 } else {
                     return false;
                 }
@@ -443,6 +519,34 @@ private:
                     uint32_t elem_len = static_cast<uint32_t>(elem.size());
                     if (!write_data(&elem_len, sizeof(elem_len))) goto write_failed;
                     if (elem_len > 0 && !write_data(elem.data(), elem_len)) goto write_failed;
+                }
+            } else if (entry.type == Store::EntryType::Hash) {
+                uint32_t field_count = static_cast<uint32_t>(entry.hash_val.size());
+                if (!write_data(&field_count, sizeof(field_count))) goto write_failed;
+                for (const auto& [field, value] : entry.hash_val) {
+                    uint32_t field_len = static_cast<uint32_t>(field.size());
+                    uint32_t value_len = static_cast<uint32_t>(value.size());
+                    if (!write_data(&field_len, sizeof(field_len))) goto write_failed;
+                    if (field_len > 0 && !write_data(field.data(), field_len)) goto write_failed;
+                    if (!write_data(&value_len, sizeof(value_len))) goto write_failed;
+                    if (value_len > 0 && !write_data(value.data(), value_len)) goto write_failed;
+                }
+            } else if (entry.type == Store::EntryType::Set) {
+                uint32_t value_count = static_cast<uint32_t>(entry.set_val.size());
+                if (!write_data(&value_count, sizeof(value_count))) goto write_failed;
+                for (const auto& value : entry.set_val) {
+                    uint32_t value_len = static_cast<uint32_t>(value.size());
+                    if (!write_data(&value_len, sizeof(value_len))) goto write_failed;
+                    if (value_len > 0 && !write_data(value.data(), value_len)) goto write_failed;
+                }
+            } else if (entry.type == Store::EntryType::ZSet) {
+                uint32_t value_count = static_cast<uint32_t>(entry.zset_val.size());
+                if (!write_data(&value_count, sizeof(value_count))) goto write_failed;
+                for (const auto& [member, score] : entry.zset_val) {
+                    uint32_t member_len = static_cast<uint32_t>(member.size());
+                    if (!write_data(&member_len, sizeof(member_len))) goto write_failed;
+                    if (member_len > 0 && !write_data(member.data(), member_len)) goto write_failed;
+                    if (!write_data(&score, sizeof(score))) goto write_failed;
                 }
             }
 

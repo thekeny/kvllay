@@ -125,6 +125,29 @@ inline std::string format_memory_human(size_t bytes) {
     return std::string(buf);
 }
 
+inline bool glob_match(std::string_view pattern, std::string_view value) noexcept {
+    size_t p = 0;
+    size_t v = 0;
+    size_t star = std::string_view::npos;
+    size_t match = 0;
+    while (v < value.size()) {
+        if (p < pattern.size() && (pattern[p] == '?' || pattern[p] == value[v])) {
+            ++p;
+            ++v;
+        } else if (p < pattern.size() && pattern[p] == '*') {
+            star = p++;
+            match = v;
+        } else if (star != std::string_view::npos) {
+            p = star + 1;
+            v = ++match;
+        } else {
+            return false;
+        }
+    }
+    while (p < pattern.size() && pattern[p] == '*') ++p;
+    return p == pattern.size();
+}
+
 }
 }
 

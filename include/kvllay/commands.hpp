@@ -11,6 +11,10 @@
 #include <charconv>
 #include <limits>
 #include <mutex>
+#include <condition_variable>
+#include <functional>
+#include <set>
+#include <cmath>
 #include <unordered_map>
 #include <constants.hpp>
 #include <resp.hpp>
@@ -49,9 +53,29 @@ public:
         clients_[client.id] = client;
     }
 
+    using ClientSink = std::function<void(std::string)>;
+
+    void set_client_sink(uint64_t id, std::function<void(std::string)> sink) {
+        std::lock_guard<std::mutex> lock(pubsub_mutex_);
+        client_sinks_[id] = std::move(sink);
+    }
+
+    ClientSink get_client_sink(uint64_t id) {
+        std::lock_guard<std::mutex> lock(pubsub_mutex_);
+        auto it = client_sinks_.find(id);
+        if (it != client_sinks_.end()) return it->second;
+        return nullptr;
+    }
+
     void unregister_client(uint64_t id) {
         std::lock_guard<std::mutex> lock(clients_mutex_);
         clients_.erase(id);
+        {
+            std::lock_guard<std::mutex> pubsub_lock(pubsub_mutex_);
+            client_sinks_.erase(id);
+            subscriptions_.erase(id);
+        }
+        store_.cancel_blocked_pop(id);
     }
 
     static inline bool iequals(std::string_view a, std::string_view b) noexcept {
@@ -64,7 +88,8 @@ public:
         return true;
     }
 
-    void dispatch(const std::vector<std::string_view>& args, std::string& out, bool& authenticated, const std::string& server_password, bool& should_close, ClientSession& client) {
+    void dispatch(const std::vector<std::string_view>& args, std::string& out, bool& authenticated, const std::string& server_password, bool& should_close, ClientSession& client, bool* is_blocked = nullptr) {
+        if (is_blocked) *is_blocked = false;
         if (args.empty()) {
             Resp::append_error(out, "empty command");
             return;
@@ -98,6 +123,13 @@ public:
         size_t pre_out_len = out.size();
         bool is_mutating = false;
         std::vector<std::string> aof_args;
+
+        if (handle_extended_command(args, out, client, is_mutating, is_blocked)) {
+            if (is_mutating && aof_mgr_ && aof_mgr_->is_enabled()) {
+                aof_mgr_->append(args);
+            }
+            return;
+        }
 
         switch (cmd.size()) {
         case 3: {
@@ -310,12 +342,446 @@ public:
     }
 
 private:
+    struct Subscription {
+        bool pattern = false;
+        std::string value;
+    };
+
     Store& store_;
     SnapshotManager* snapshot_mgr_;
     AofManager* aof_mgr_;
     std::chrono::steady_clock::time_point start_time_;
     mutable std::mutex clients_mutex_;
     std::unordered_map<uint64_t, ClientSession> clients_;
+    std::mutex pubsub_mutex_;
+    std::unordered_map<uint64_t, ClientSink> client_sinks_;
+    std::unordered_map<uint64_t, std::vector<Subscription>> subscriptions_;
+    std::mutex list_wait_mutex_;
+    std::condition_variable list_wait_cv_;
+
+    static bool glob_match(std::string_view pattern, std::string_view value) {
+        size_t p = 0;
+        size_t v = 0;
+        size_t star = std::string_view::npos;
+        size_t match = 0;
+        while (v < value.size()) {
+            if (p < pattern.size() && (pattern[p] == '?' || pattern[p] == value[v])) {
+                ++p;
+                ++v;
+            } else if (p < pattern.size() && pattern[p] == '*') {
+                star = p++;
+                match = v;
+            } else if (star != std::string_view::npos) {
+                p = star + 1;
+                v = ++match;
+            } else {
+                return false;
+            }
+        }
+        while (p < pattern.size() && pattern[p] == '*') ++p;
+        return p == pattern.size();
+    }
+
+    static bool parse_double(std::string_view value, double& result) {
+        std::string text(value);
+        if (text == "+inf" || text == "inf") {
+            result = std::numeric_limits<double>::infinity();
+            return true;
+        }
+        if (text == "-inf") {
+            result = -std::numeric_limits<double>::infinity();
+            return true;
+        }
+        try {
+            size_t consumed = 0;
+            result = std::stod(text, &consumed);
+            return consumed == text.size() && std::isfinite(result);
+        } catch (...) {
+            return false;
+        }
+    }
+
+    static void append_wrongtype(std::string& out) {
+        Resp::append_error(out, "WRONGTYPE Operation against a key holding the wrong kind of value");
+    }
+
+    size_t subscription_count_locked(uint64_t client_id) const {
+        auto it = subscriptions_.find(client_id);
+        return it == subscriptions_.end() ? 0 : it->second.size();
+    }
+
+    void append_subscription_ack(std::string& out, std::string_view command,
+                                 std::string_view value, size_t count) {
+        Resp::append_array_header(out, 3);
+        Resp::append_bulk_string(out, command);
+        Resp::append_bulk_string(out, value);
+        Resp::append_integer(out, static_cast<long long>(count));
+    }
+
+    int publish_message(std::string_view channel, std::string_view payload) {
+        std::vector<std::pair<ClientSink, std::string>> deliveries;
+        std::set<uint64_t> recipients;
+        {
+            std::lock_guard<std::mutex> lock(pubsub_mutex_);
+            for (const auto& [client_id, subscriptions] : subscriptions_) {
+                auto sink_it = client_sinks_.find(client_id);
+                if (sink_it == client_sinks_.end()) continue;
+                for (const auto& subscription : subscriptions) {
+                    if ((!subscription.pattern && subscription.value == channel) ||
+                        (subscription.pattern && glob_match(subscription.value, channel))) {
+                        std::string frame;
+                        Resp::append_array_header(frame, subscription.pattern ? 4 : 3);
+                        Resp::append_bulk_string(frame, subscription.pattern ? "pmessage" : "message");
+                        if (subscription.pattern) Resp::append_bulk_string(frame, subscription.value);
+                        Resp::append_bulk_string(frame, channel);
+                        Resp::append_bulk_string(frame, payload);
+                        deliveries.emplace_back(sink_it->second, std::move(frame));
+                        recipients.insert(client_id);
+                    }
+                }
+            }
+        }
+        for (auto& delivery : deliveries) {
+            if (delivery.first) delivery.first(std::move(delivery.second));
+        }
+        return static_cast<int>(recipients.size());
+    }
+
+    bool handle_extended_command(const std::vector<std::string_view>& args, std::string& out,
+                                 ClientSession& client, bool& is_mutating, bool* is_blocked = nullptr) {
+        if (args.empty()) return false;
+        const std::string_view cmd = args[0];
+
+        if (iequals(cmd, "HSET") || iequals(cmd, "HSETNX") || iequals(cmd, "HGET") ||
+            iequals(cmd, "HGETALL") || iequals(cmd, "HDEL") || iequals(cmd, "HLEN")) {
+            if (args.size() < 2) {
+                Resp::append_error(out, "wrong number of arguments");
+                return true;
+            }
+            if (iequals(cmd, "HSET")) {
+                if (args.size() < 4 || ((args.size() - 2) % 2) != 0) {
+                    Resp::append_error(out, "wrong number of arguments for 'hset' command");
+                    return true;
+                }
+                std::vector<std::pair<std::string, std::string>> fields;
+                for (size_t i = 2; i < args.size(); i += 2) fields.emplace_back(args[i], args[i + 1]);
+                size_t added = 0;
+                auto status = store_.hset(std::string(args[1]), fields, added);
+                if (status == Store::CollectionStatus::WrongType) append_wrongtype(out);
+                else Resp::append_integer(out, static_cast<long long>(added));
+                is_mutating = status == Store::CollectionStatus::Success;
+                return true;
+            }
+            if (iequals(cmd, "HSETNX")) {
+                if (args.size() != 4) {
+                    Resp::append_error(out, "wrong number of arguments for 'hsetnx' command");
+                    return true;
+                }
+                int inserted = 0;
+                auto status = store_.hsetnx(std::string(args[1]), std::string(args[2]), std::string(args[3]), inserted);
+                if (status == Store::CollectionStatus::WrongType) append_wrongtype(out);
+                else Resp::append_integer(out, inserted);
+                is_mutating = status == Store::CollectionStatus::Success && inserted != 0;
+                return true;
+            }
+            if (iequals(cmd, "HGET")) {
+                if (args.size() != 3) {
+                    Resp::append_error(out, "wrong number of arguments for 'hget' command");
+                    return true;
+                }
+                std::string value;
+                auto status = store_.hget(std::string(args[1]), std::string(args[2]), value);
+                if (status == Store::CollectionStatus::WrongType) append_wrongtype(out);
+                else if (status == Store::CollectionStatus::NotFound) Resp::append_null_bulk_string(out, client.protocol);
+                else Resp::append_bulk_string(out, value);
+                return true;
+            }
+            if (iequals(cmd, "HGETALL")) {
+                if (args.size() != 2) {
+                    Resp::append_error(out, "wrong number of arguments for 'hgetall' command");
+                    return true;
+                }
+                std::vector<std::pair<std::string, std::string>> fields;
+                auto status = store_.hgetall(std::string(args[1]), fields);
+                if (status == Store::CollectionStatus::WrongType) append_wrongtype(out);
+                else {
+                    if (client.protocol == 3) out += "%" + std::to_string(fields.size()) + "\r\n";
+                    else Resp::append_array_header(out, fields.size() * 2);
+                    for (const auto& [field, value] : fields) {
+                        Resp::append_bulk_string(out, field);
+                        Resp::append_bulk_string(out, value);
+                    }
+                }
+                return true;
+            }
+            if (iequals(cmd, "HDEL")) {
+                if (args.size() < 3) {
+                    Resp::append_error(out, "wrong number of arguments for 'hdel' command");
+                    return true;
+                }
+                std::vector<std::string> fields;
+                for (size_t i = 2; i < args.size(); ++i) fields.emplace_back(args[i]);
+                size_t removed = 0;
+                auto status = store_.hdel(std::string(args[1]), fields, removed);
+                if (status == Store::CollectionStatus::WrongType) append_wrongtype(out);
+                else Resp::append_integer(out, static_cast<long long>(removed));
+                is_mutating = status == Store::CollectionStatus::Success && removed > 0;
+                return true;
+            }
+            if (args.size() != 2) {
+                Resp::append_error(out, "wrong number of arguments for 'hlen' command");
+                return true;
+            }
+            size_t length = 0;
+            auto status = store_.hlen(std::string(args[1]), length);
+            if (status == Store::CollectionStatus::WrongType) append_wrongtype(out);
+            else Resp::append_integer(out, static_cast<long long>(length));
+            return true;
+        }
+
+        if (iequals(cmd, "SADD") || iequals(cmd, "SREM") || iequals(cmd, "SMEMBERS")) {
+            if (args.size() < 2) {
+                Resp::append_error(out, "wrong number of arguments");
+                return true;
+            }
+            if (iequals(cmd, "SMEMBERS")) {
+                if (args.size() != 2) {
+                    Resp::append_error(out, "wrong number of arguments for 'smembers' command");
+                    return true;
+                }
+                std::vector<std::string> values;
+                auto status = store_.smembers(std::string(args[1]), values);
+                if (status == Store::CollectionStatus::WrongType) append_wrongtype(out);
+                else {
+                    Resp::append_array_header(out, values.size());
+                    for (const auto& value : values) Resp::append_bulk_string(out, value);
+                }
+                return true;
+            }
+            if (args.size() < 3) {
+                Resp::append_error(out, "wrong number of arguments");
+                return true;
+            }
+            std::vector<std::string> values;
+            for (size_t i = 2; i < args.size(); ++i) values.emplace_back(args[i]);
+            size_t changed = 0;
+            auto status = iequals(cmd, "SADD")
+                ? store_.sadd(std::string(args[1]), values, changed)
+                : store_.srem(std::string(args[1]), values, changed);
+            if (status == Store::CollectionStatus::WrongType) append_wrongtype(out);
+            else Resp::append_integer(out, static_cast<long long>(changed));
+            is_mutating = status == Store::CollectionStatus::Success && changed > 0;
+            return true;
+        }
+
+        if (iequals(cmd, "ZADD") || iequals(cmd, "ZREM") || iequals(cmd, "ZRANGEBYSCORE") || iequals(cmd, "ZSCORE")) {
+            if (args.size() < 2) {
+                Resp::append_error(out, "wrong number of arguments");
+                return true;
+            }
+            if (iequals(cmd, "ZADD")) {
+                if (args.size() < 4 || ((args.size() - 2) % 2) != 0) {
+                    Resp::append_error(out, "wrong number of arguments for 'zadd' command");
+                    return true;
+                }
+                std::vector<std::pair<std::string, double>> values;
+                for (size_t i = 2; i < args.size(); i += 2) {
+                    double score = 0;
+                    if (!parse_double(args[i], score)) {
+                        Resp::append_error(out, "value is not a valid float");
+                        return true;
+                    }
+                    values.emplace_back(args[i + 1], score);
+                }
+                size_t added = 0;
+                auto status = store_.zadd(std::string(args[1]), values, added);
+                if (status == Store::CollectionStatus::WrongType) append_wrongtype(out);
+                else Resp::append_integer(out, static_cast<long long>(added));
+                is_mutating = status == Store::CollectionStatus::Success;
+                return true;
+            }
+            if (iequals(cmd, "ZREM")) {
+                if (args.size() < 3) {
+                    Resp::append_error(out, "wrong number of arguments for 'zrem' command");
+                    return true;
+                }
+                std::vector<std::string> values;
+                for (size_t i = 2; i < args.size(); ++i) values.emplace_back(args[i]);
+                size_t removed = 0;
+                auto status = store_.zrem(std::string(args[1]), values, removed);
+                if (status == Store::CollectionStatus::WrongType) append_wrongtype(out);
+                else Resp::append_integer(out, static_cast<long long>(removed));
+                is_mutating = status == Store::CollectionStatus::Success && removed > 0;
+                return true;
+            }
+            if (iequals(cmd, "ZSCORE")) {
+                if (args.size() != 3) {
+                    Resp::append_error(out, "wrong number of arguments for 'zscore' command");
+                    return true;
+                }
+                double score = 0;
+                auto status = store_.zscore(std::string(args[1]), std::string(args[2]), score);
+                if (status == Store::CollectionStatus::WrongType) append_wrongtype(out);
+                else if (status == Store::CollectionStatus::NotFound) Resp::append_null_bulk_string(out, client.protocol);
+                else {
+                    if (client.protocol == 3) {
+                        Resp::append_double(out, score);
+                    } else {
+                        char score_buf[64];
+                        int len = std::snprintf(score_buf, sizeof(score_buf), "%.17g", score);
+                        Resp::append_bulk_string(out, std::string_view(score_buf, len));
+                    }
+                }
+                return true;
+            }
+            if (args.size() != 4) {
+                Resp::append_error(out, "wrong number of arguments for 'zrangebyscore' command");
+                return true;
+            }
+            auto parse_bound = [](std::string_view input, double& value, bool& exclusive) {
+                exclusive = !input.empty() && input.front() == '(';
+                if (exclusive) input.remove_prefix(1);
+                return CommandHandler::parse_double(input, value);
+            };
+            double min_score = 0, max_score = 0;
+            bool min_exclusive = false, max_exclusive = false;
+            if (!parse_bound(args[2], min_score, min_exclusive) || !parse_bound(args[3], max_score, max_exclusive)) {
+                Resp::append_error(out, "min or max is not a float");
+                return true;
+            }
+            std::vector<std::string> values;
+            auto status = store_.zrangebyscore(std::string(args[1]), min_score, max_score,
+                                               min_exclusive, max_exclusive, values);
+            if (status == Store::CollectionStatus::WrongType) append_wrongtype(out);
+            else {
+                Resp::append_array_header(out, values.size());
+                for (const auto& value : values) Resp::append_bulk_string(out, value);
+            }
+            return true;
+        }
+
+        if (iequals(cmd, "SCAN")) {
+            if (args.size() < 2 || args.size() > 6) {
+                Resp::append_error(out, "wrong number of arguments for 'scan' command");
+                return true;
+            }
+            std::string pattern = "*";
+            for (size_t i = 2; i + 1 < args.size(); i += 2) {
+                if (iequals(args[i], "MATCH")) pattern = std::string(args[i + 1]);
+                else if (!iequals(args[i], "COUNT")) {
+                    Resp::append_error(out, "syntax error");
+                    return true;
+                }
+            }
+            auto values = store_.keys(pattern);
+            Resp::append_array_header(out, 2);
+            Resp::append_bulk_string(out, "0");
+            Resp::append_array_header(out, values.size());
+            for (const auto& value : values) Resp::append_bulk_string(out, value);
+            return true;
+        }
+
+        if (iequals(cmd, "BRPOP")) {
+            if (args.size() < 3) {
+                Resp::append_error(out, "wrong number of arguments for 'brpop' command");
+                return true;
+            }
+            long long timeout = 0;
+            auto [ptr, ec] = std::from_chars(args.back().data(), args.back().data() + args.back().size(), timeout);
+            if (ec != std::errc() || ptr != args.back().data() + args.back().size() || timeout < 0) {
+                Resp::append_error(out, "timeout is not an integer or out of range");
+                return true;
+            }
+            std::vector<std::string> keys;
+            for (size_t i = 1; i + 1 < args.size(); ++i) keys.emplace_back(args[i]);
+            std::string key, value;
+            auto status = store_.try_pop_keys(keys, key, value);
+            if (status == Store::BlockingPopStatus::WrongType) {
+                append_wrongtype(out);
+                return true;
+            }
+            if (status == Store::BlockingPopStatus::Success) {
+                Resp::append_array_header(out, 2);
+                Resp::append_bulk_string(out, key);
+                Resp::append_bulk_string(out, value);
+                return true;
+            }
+
+            auto sink = get_client_sink(client.id);
+            if (sink) {
+                store_.register_blocked_pop(client.id, client.protocol, keys, static_cast<uint64_t>(timeout), std::move(sink));
+                if (is_blocked) *is_blocked = true;
+                return true;
+            }
+
+            status = store_.brpop(keys, static_cast<uint64_t>(timeout), key, value);
+            if (status == Store::BlockingPopStatus::WrongType) append_wrongtype(out);
+            else if (status == Store::BlockingPopStatus::Timeout) Resp::append_null_array(out, client.protocol);
+            else {
+                Resp::append_array_header(out, 2);
+                Resp::append_bulk_string(out, key);
+                Resp::append_bulk_string(out, value);
+            }
+            return true;
+        }
+
+        if (iequals(cmd, "PUBLISH")) {
+            if (args.size() != 3) {
+                Resp::append_error(out, "wrong number of arguments for 'publish' command");
+                return true;
+            }
+            int count = publish_message(args[1], args[2]);
+            Resp::append_integer(out, count);
+            is_mutating = false;
+            return true;
+        }
+
+        if (iequals(cmd, "SUBSCRIBE") || iequals(cmd, "PSUBSCRIBE")) {
+            if (args.size() < 2 || client.id == 0) {
+                Resp::append_error(out, "wrong number of arguments for 'subscribe' command");
+                return true;
+            }
+            bool pattern = iequals(cmd, "PSUBSCRIBE");
+            std::lock_guard<std::mutex> lock(pubsub_mutex_);
+            auto& subscriptions = subscriptions_[client.id];
+            for (size_t i = 1; i < args.size(); ++i) {
+                std::string value(args[i]);
+                bool exists = std::any_of(subscriptions.begin(), subscriptions.end(), [&](const Subscription& sub) {
+                    return sub.pattern == pattern && sub.value == value;
+                });
+                if (!exists) subscriptions.push_back({pattern, std::move(value)});
+                append_subscription_ack(out, pattern ? "psubscribe" : "subscribe", args[i], subscriptions.size());
+            }
+            return true;
+        }
+
+        if (iequals(cmd, "UNSUBSCRIBE") || iequals(cmd, "PUNSUBSCRIBE")) {
+            bool pattern = iequals(cmd, "PUNSUBSCRIBE");
+            std::lock_guard<std::mutex> lock(pubsub_mutex_);
+            auto& subscriptions = subscriptions_[client.id];
+            if (args.size() == 1) {
+                for (auto it = subscriptions.begin(); it != subscriptions.end();) {
+                    if (it->pattern == pattern) it = subscriptions.erase(it);
+                    else ++it;
+                }
+                Resp::append_array_header(out, 3);
+                Resp::append_bulk_string(out, pattern ? "punsubscribe" : "unsubscribe");
+                Resp::append_null_bulk_string(out, client.protocol);
+                Resp::append_integer(out, subscriptions.size());
+            } else {
+                for (size_t i = 1; i < args.size(); ++i) {
+                    std::string value(args[i]);
+                    subscriptions.erase(std::remove_if(subscriptions.begin(), subscriptions.end(), [&](const Subscription& sub) {
+                        return sub.pattern == pattern && sub.value == value;
+                    }), subscriptions.end());
+                    append_subscription_ack(out, pattern ? "punsubscribe" : "unsubscribe", value, subscriptions.size());
+                }
+            }
+            return true;
+        }
+
+        return false;
+    }
 
     std::vector<ClientSession> client_snapshot() const {
         std::lock_guard<std::mutex> lock(clients_mutex_);
@@ -1300,6 +1766,9 @@ private:
         switch (t) {
             case Store::KeyType::String: Resp::append_simple_string(out, "string"); break;
             case Store::KeyType::List: Resp::append_simple_string(out, "list"); break;
+            case Store::KeyType::Hash: Resp::append_simple_string(out, "hash"); break;
+            case Store::KeyType::Set: Resp::append_simple_string(out, "set"); break;
+            case Store::KeyType::ZSet: Resp::append_simple_string(out, "zset"); break;
             case Store::KeyType::None:
             default: Resp::append_simple_string(out, "none"); break;
         }

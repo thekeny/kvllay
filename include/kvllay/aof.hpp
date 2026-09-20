@@ -414,6 +414,38 @@ private:
                     serialized += Resp::array({"PEXPIREAT", entry.key,
                                                std::to_string(entry.expire_at_epoch_ms)});
                 }
+            } else if (entry.type == Store::EntryType::Hash) {
+                if (entry.hash_val.empty() || (entry.expire_at_epoch_ms != 0 && entry.expire_at_epoch_ms <= now_wall)) continue;
+                std::vector<std::string> hset_args{"HSET", entry.key};
+                for (const auto& [field, value] : entry.hash_val) {
+                    hset_args.push_back(field);
+                    hset_args.push_back(value);
+                }
+                serialized = Resp::array(hset_args);
+                if (entry.expire_at_epoch_ms > now_wall) {
+                    serialized += Resp::array({"PEXPIREAT", entry.key, std::to_string(entry.expire_at_epoch_ms)});
+                }
+            } else if (entry.type == Store::EntryType::Set) {
+                if (entry.set_val.empty() || (entry.expire_at_epoch_ms != 0 && entry.expire_at_epoch_ms <= now_wall)) continue;
+                std::vector<std::string> sadd_args{"SADD", entry.key};
+                sadd_args.insert(sadd_args.end(), entry.set_val.begin(), entry.set_val.end());
+                serialized = Resp::array(sadd_args);
+                if (entry.expire_at_epoch_ms > now_wall) {
+                    serialized += Resp::array({"PEXPIREAT", entry.key, std::to_string(entry.expire_at_epoch_ms)});
+                }
+            } else if (entry.type == Store::EntryType::ZSet) {
+                if (entry.zset_val.empty() || (entry.expire_at_epoch_ms != 0 && entry.expire_at_epoch_ms <= now_wall)) continue;
+                std::vector<std::string> zadd_args{"ZADD", entry.key};
+                char sbuf[64];
+                for (const auto& [member, score] : entry.zset_val) {
+                    std::snprintf(sbuf, sizeof(sbuf), "%.17g", score);
+                    zadd_args.push_back(sbuf);
+                    zadd_args.push_back(member);
+                }
+                serialized = Resp::array(zadd_args);
+                if (entry.expire_at_epoch_ms > now_wall) {
+                    serialized += Resp::array({"PEXPIREAT", entry.key, std::to_string(entry.expire_at_epoch_ms)});
+                }
             } else {
                 continue;
             }
@@ -603,6 +635,44 @@ private:
             }
             std::vector<std::string> popped;
             store.rpop(args[1], count, popped);
+        } else if (cmd == "HSET" && args.size() >= 4 && (args.size() - 2) % 2 == 0) {
+            std::vector<std::pair<std::string, std::string>> fields;
+            for (size_t i = 2; i < args.size(); i += 2) fields.emplace_back(args[i], args[i + 1]);
+            size_t added = 0;
+            store.hset(args[1], fields, added);
+        } else if (cmd == "HSETNX" && args.size() >= 4) {
+            int inserted = 0;
+            store.hsetnx(args[1], args[2], args[3], inserted);
+        } else if (cmd == "HDEL" && args.size() >= 3) {
+            std::vector<std::string> fields(args.begin() + 2, args.end());
+            size_t removed = 0;
+            store.hdel(args[1], fields, removed);
+        } else if (cmd == "SADD" && args.size() >= 3) {
+            std::vector<std::string> values(args.begin() + 2, args.end());
+            size_t added = 0;
+            store.sadd(args[1], values, added);
+        } else if (cmd == "SREM" && args.size() >= 3) {
+            std::vector<std::string> values(args.begin() + 2, args.end());
+            size_t removed = 0;
+            store.srem(args[1], values, removed);
+        } else if (cmd == "ZADD" && args.size() >= 4 && (args.size() - 2) % 2 == 0) {
+            std::vector<std::pair<std::string, double>> values;
+            for (size_t i = 2; i < args.size(); i += 2) {
+                try {
+                    values.emplace_back(args[i + 1], std::stod(args[i]));
+                } catch (...) {
+                    values.clear();
+                    break;
+                }
+            }
+            if (!values.empty()) {
+                size_t added = 0;
+                store.zadd(args[1], values, added);
+            }
+        } else if (cmd == "ZREM" && args.size() >= 3) {
+            std::vector<std::string> values(args.begin() + 2, args.end());
+            size_t removed = 0;
+            store.zrem(args[1], values, removed);
         }
     }
 

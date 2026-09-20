@@ -6,6 +6,7 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <map>
 #include <vector>
 #include <deque>
 #include <variant>
@@ -21,8 +22,11 @@
 #include <cstdint>
 #include <charconv>
 #include <limits>
+#include <functional>
+#include <list>
 #include <constants.hpp>
 #include <allocator.hpp>
+#include <resp.hpp>
 
 namespace kvllay {
 
@@ -32,11 +36,18 @@ public:
 
     enum class EntryType : uint8_t {
         String = 0,
-        List = 1
+        List = 1,
+        Hash = 2,
+        Set = 3,
+        ZSet = 4
     };
 
+    using Hash = std::unordered_map<std::string, std::string>;
+    using Set = std::unordered_set<std::string>;
+    using ZSet = std::map<std::string, double>;
+
     struct Entry {
-        std::variant<std::string, std::deque<std::string>> data;
+        std::variant<std::string, std::deque<std::string>, Hash, Set, ZSet> data;
         uint64_t expire_at = 0;
         mutable std::atomic<uint64_t> last_access{0};
 
@@ -47,6 +58,12 @@ public:
             : data(std::string(str)), expire_at(exp), last_access(access) {}
         Entry(std::deque<std::string> lst, uint64_t exp = 0, uint64_t access = 0)
             : data(std::move(lst)), expire_at(exp), last_access(access) {}
+        Entry(Hash hash, uint64_t exp = 0, uint64_t access = 0)
+            : data(std::move(hash)), expire_at(exp), last_access(access) {}
+        Entry(Set set, uint64_t exp = 0, uint64_t access = 0)
+            : data(std::move(set)), expire_at(exp), last_access(access) {}
+        Entry(ZSet zset, uint64_t exp = 0, uint64_t access = 0)
+            : data(std::move(zset)), expire_at(exp), last_access(access) {}
 
         Entry(const Entry& other)
             : data(other.data), expire_at(other.expire_at),
@@ -84,6 +101,9 @@ public:
         bool is_list() const noexcept {
             return std::holds_alternative<std::deque<std::string>>(data);
         }
+        bool is_hash() const noexcept { return std::holds_alternative<Hash>(data); }
+        bool is_set() const noexcept { return std::holds_alternative<Set>(data); }
+        bool is_zset() const noexcept { return std::holds_alternative<ZSet>(data); }
         const std::string& as_string() const {
             return std::get<std::string>(data);
         }
@@ -96,6 +116,12 @@ public:
         std::deque<std::string>& as_list() {
             return std::get<std::deque<std::string>>(data);
         }
+        const Hash& as_hash() const { return std::get<Hash>(data); }
+        Hash& as_hash() { return std::get<Hash>(data); }
+        const Set& as_set() const { return std::get<Set>(data); }
+        Set& as_set() { return std::get<Set>(data); }
+        const ZSet& as_zset() const { return std::get<ZSet>(data); }
+        ZSet& as_zset() { return std::get<ZSet>(data); }
     };
 
     struct DumpEntry {
@@ -103,13 +129,19 @@ public:
         EntryType type = EntryType::String;
         std::string string_val;
         std::vector<std::string> list_val;
+        std::vector<std::pair<std::string, std::string>> hash_val;
+        std::vector<std::string> set_val;
+        std::vector<std::pair<std::string, double>> zset_val;
         uint64_t expire_at_epoch_ms = 0;
     };
 
     enum class KeyType {
         None,
         String,
-        List
+        List,
+        Hash,
+        Set,
+        ZSet
     };
 
     enum class GetStatus {
@@ -154,6 +186,18 @@ public:
     enum class ListRangeStatus {
         Success,
         NotFound,
+        WrongType
+    };
+
+    enum class CollectionStatus {
+        Success,
+        NotFound,
+        WrongType
+    };
+
+    enum class BlockingPopStatus {
+        Success,
+        Timeout,
         WrongType
     };
 
@@ -219,6 +263,18 @@ public:
             mem += lst.size() * 48;
             for (const auto& elem : lst) {
                 mem += elem.size();
+            }
+        } else if (entry.is_hash()) {
+            mem += entry.as_hash().size() * 64;
+            for (const auto& [field, value] : entry.as_hash()) mem += field.size() + value.size();
+        } else if (entry.is_set()) {
+            mem += entry.as_set().size() * 48;
+            for (const auto& value : entry.as_set()) mem += value.size();
+        } else if (entry.is_zset()) {
+            mem += entry.as_zset().size() * 64;
+            for (const auto& [member, score] : entry.as_zset()) {
+                (void)score;
+                mem += member.size();
             }
         }
         return mem;
@@ -763,7 +819,11 @@ public:
             if (it->second.expire_at != 0 && it->second.expire_at <= now) {
             } else {
                 it->second.touch(current_lru_clock());
-                return it->second.is_string() ? KeyType::String : KeyType::List;
+                if (it->second.is_string()) return KeyType::String;
+                if (it->second.is_list()) return KeyType::List;
+                if (it->second.is_hash()) return KeyType::Hash;
+                if (it->second.is_set()) return KeyType::Set;
+                return KeyType::ZSet;
             }
         }
 
@@ -777,9 +837,320 @@ public:
                 return KeyType::None;
             }
             it->second.touch(current_lru_clock());
-            return it->second.is_string() ? KeyType::String : KeyType::List;
+            if (it->second.is_string()) return KeyType::String;
+            if (it->second.is_list()) return KeyType::List;
+            if (it->second.is_hash()) return KeyType::Hash;
+            if (it->second.is_set()) return KeyType::Set;
+            return KeyType::ZSet;
         }
         return KeyType::None;
+    }
+
+    CollectionStatus hset(const std::string& key,
+                          const std::vector<std::pair<std::string, std::string>>& fields,
+                          size_t& added) {
+        added = 0;
+        if (fields.empty()) return CollectionStatus::Success;
+        size_t idx = shard_index(key);
+        auto& shard = shards_[idx];
+        std::unique_lock<std::shared_mutex> lock(shard.mutex);
+        auto it = shard.data.find(key);
+        if (it != shard.data.end() && it->second.expire_at != 0 && it->second.expire_at <= current_time_ms()) {
+            sub_memory(estimate_entry_memory(key, it->second));
+            shard.data.erase(it);
+            shard.keys_with_ttl.erase(key);
+            it = shard.data.end();
+        }
+        if (it == shard.data.end()) {
+            it = shard.data.emplace(key, Entry{Hash{}, 0, current_lru_clock()}).first;
+        } else if (!it->second.is_hash()) {
+            return CollectionStatus::WrongType;
+        }
+        size_t old_mem = estimate_entry_memory(key, it->second);
+        auto& hash = it->second.as_hash();
+        for (const auto& [field, value] : fields) {
+            if (hash.find(field) == hash.end()) ++added;
+            hash[field] = value;
+        }
+        it->second.touch(current_lru_clock());
+        size_t new_mem = estimate_entry_memory(key, it->second);
+        if (new_mem > old_mem) add_memory(new_mem - old_mem);
+        else if (old_mem > new_mem) sub_memory(old_mem - new_mem);
+        dirty_ += fields.size();
+        return CollectionStatus::Success;
+    }
+
+    CollectionStatus hsetnx(const std::string& key, const std::string& field,
+                            const std::string& value, int& inserted) {
+        inserted = 0;
+        size_t idx = shard_index(key);
+        auto& shard = shards_[idx];
+        std::unique_lock<std::shared_mutex> lock(shard.mutex);
+        auto it = shard.data.find(key);
+        if (it != shard.data.end() && it->second.expire_at != 0 && it->second.expire_at <= current_time_ms()) {
+            sub_memory(estimate_entry_memory(key, it->second));
+            shard.data.erase(it);
+            shard.keys_with_ttl.erase(key);
+            it = shard.data.end();
+        }
+        if (it == shard.data.end()) {
+            it = shard.data.emplace(key, Entry{Hash{}, 0, current_lru_clock()}).first;
+        } else if (!it->second.is_hash()) {
+            return CollectionStatus::WrongType;
+        }
+        auto& hash = it->second.as_hash();
+        if (hash.find(field) != hash.end()) return CollectionStatus::Success;
+        size_t old_mem = estimate_entry_memory(key, it->second);
+        hash[field] = value;
+        size_t new_mem = estimate_entry_memory(key, it->second);
+        if (new_mem > old_mem) add_memory(new_mem - old_mem);
+        it->second.touch(current_lru_clock());
+        inserted = 1;
+        dirty_++;
+        return CollectionStatus::Success;
+    }
+
+    CollectionStatus hget(const std::string& key, const std::string& field,
+                          std::string& value) {
+        value.clear();
+        size_t idx = shard_index(key);
+        auto& shard = shards_[idx];
+        std::shared_lock<std::shared_mutex> lock(shard.mutex);
+        auto it = shard.data.find(key);
+        if (it == shard.data.end() || (it->second.expire_at != 0 && it->second.expire_at <= current_time_ms())) {
+            return CollectionStatus::NotFound;
+        }
+        if (!it->second.is_hash()) return CollectionStatus::WrongType;
+        auto field_it = it->second.as_hash().find(field);
+        if (field_it == it->second.as_hash().end()) return CollectionStatus::NotFound;
+        value = field_it->second;
+        return CollectionStatus::Success;
+    }
+
+    CollectionStatus hgetall(const std::string& key, std::vector<std::pair<std::string, std::string>>& values) {
+        values.clear();
+        size_t idx = shard_index(key);
+        auto& shard = shards_[idx];
+        std::shared_lock<std::shared_mutex> lock(shard.mutex);
+        auto it = shard.data.find(key);
+        if (it == shard.data.end() || (it->second.expire_at != 0 && it->second.expire_at <= current_time_ms())) {
+            return CollectionStatus::NotFound;
+        }
+        if (!it->second.is_hash()) return CollectionStatus::WrongType;
+        values.reserve(it->second.as_hash().size());
+        for (const auto& pair : it->second.as_hash()) values.push_back(pair);
+        return CollectionStatus::Success;
+    }
+
+    CollectionStatus hdel(const std::string& key, const std::vector<std::string>& fields, size_t& removed) {
+        removed = 0;
+        size_t idx = shard_index(key);
+        auto& shard = shards_[idx];
+        std::unique_lock<std::shared_mutex> lock(shard.mutex);
+        auto it = shard.data.find(key);
+        if (it == shard.data.end()) return CollectionStatus::NotFound;
+        if (it->second.expire_at != 0 && it->second.expire_at <= current_time_ms()) {
+            sub_memory(estimate_entry_memory(key, it->second));
+            shard.data.erase(it);
+            shard.keys_with_ttl.erase(key);
+            return CollectionStatus::NotFound;
+        }
+        if (!it->second.is_hash()) return CollectionStatus::WrongType;
+        size_t old_mem = estimate_entry_memory(key, it->second);
+        auto& hash = it->second.as_hash();
+        for (const auto& field : fields) removed += hash.erase(field);
+        if (hash.empty()) {
+            sub_memory(old_mem);
+            shard.data.erase(it);
+            shard.keys_with_ttl.erase(key);
+        } else {
+            size_t new_mem = estimate_entry_memory(key, it->second);
+            if (old_mem > new_mem) sub_memory(old_mem - new_mem);
+        }
+        if (removed) dirty_ += removed;
+        return CollectionStatus::Success;
+    }
+
+    CollectionStatus hlen(const std::string& key, size_t& length) {
+        length = 0;
+        std::string unused;
+        size_t idx = shard_index(key);
+        auto& shard = shards_[idx];
+        std::shared_lock<std::shared_mutex> lock(shard.mutex);
+        auto it = shard.data.find(key);
+        if (it == shard.data.end() || (it->second.expire_at != 0 && it->second.expire_at <= current_time_ms())) {
+            return CollectionStatus::Success;
+        }
+        if (!it->second.is_hash()) return CollectionStatus::WrongType;
+        length = it->second.as_hash().size();
+        return CollectionStatus::Success;
+    }
+
+    CollectionStatus sadd(const std::string& key, const std::vector<std::string>& values, size_t& added) {
+        added = 0;
+        size_t idx = shard_index(key);
+        auto& shard = shards_[idx];
+        std::unique_lock<std::shared_mutex> lock(shard.mutex);
+        auto it = shard.data.find(key);
+        if (it != shard.data.end() && it->second.expire_at != 0 && it->second.expire_at <= current_time_ms()) {
+            sub_memory(estimate_entry_memory(key, it->second));
+            shard.data.erase(it);
+            shard.keys_with_ttl.erase(key);
+            it = shard.data.end();
+        }
+        if (it == shard.data.end()) it = shard.data.emplace(key, Entry{Set{}, 0, current_lru_clock()}).first;
+        else if (!it->second.is_set()) return CollectionStatus::WrongType;
+        size_t old_mem = estimate_entry_memory(key, it->second);
+        auto& set = it->second.as_set();
+        for (const auto& value : values) added += set.insert(value).second;
+        size_t new_mem = estimate_entry_memory(key, it->second);
+        if (new_mem > old_mem) add_memory(new_mem - old_mem);
+        it->second.touch(current_lru_clock());
+        if (added) dirty_ += added;
+        return CollectionStatus::Success;
+    }
+
+    CollectionStatus srem(const std::string& key, const std::vector<std::string>& values, size_t& removed) {
+        removed = 0;
+        size_t idx = shard_index(key);
+        auto& shard = shards_[idx];
+        std::unique_lock<std::shared_mutex> lock(shard.mutex);
+        auto it = shard.data.find(key);
+        if (it == shard.data.end()) return CollectionStatus::NotFound;
+        if (it->second.expire_at != 0 && it->second.expire_at <= current_time_ms()) return CollectionStatus::NotFound;
+        if (!it->second.is_set()) return CollectionStatus::WrongType;
+        size_t old_mem = estimate_entry_memory(key, it->second);
+        auto& set = it->second.as_set();
+        for (const auto& value : values) removed += set.erase(value);
+        if (set.empty()) {
+            sub_memory(old_mem);
+            shard.data.erase(it);
+            shard.keys_with_ttl.erase(key);
+        } else {
+            size_t new_mem = estimate_entry_memory(key, it->second);
+            if (old_mem > new_mem) sub_memory(old_mem - new_mem);
+        }
+        if (removed) dirty_ += removed;
+        return CollectionStatus::Success;
+    }
+
+    CollectionStatus smembers(const std::string& key, std::vector<std::string>& values) {
+        values.clear();
+        size_t idx = shard_index(key);
+        auto& shard = shards_[idx];
+        std::shared_lock<std::shared_mutex> lock(shard.mutex);
+        auto it = shard.data.find(key);
+        if (it == shard.data.end() || (it->second.expire_at != 0 && it->second.expire_at <= current_time_ms())) return CollectionStatus::Success;
+        if (!it->second.is_set()) return CollectionStatus::WrongType;
+        values.assign(it->second.as_set().begin(), it->second.as_set().end());
+        return CollectionStatus::Success;
+    }
+
+    CollectionStatus zadd(const std::string& key, const std::vector<std::pair<std::string, double>>& values, size_t& added) {
+        added = 0;
+        size_t idx = shard_index(key);
+        auto& shard = shards_[idx];
+        std::unique_lock<std::shared_mutex> lock(shard.mutex);
+        auto it = shard.data.find(key);
+        if (it != shard.data.end() && it->second.expire_at != 0 && it->second.expire_at <= current_time_ms()) {
+            sub_memory(estimate_entry_memory(key, it->second));
+            shard.data.erase(it);
+            shard.keys_with_ttl.erase(key);
+            it = shard.data.end();
+        }
+        bool is_new_entry = false;
+        if (it == shard.data.end()) {
+            it = shard.data.emplace(key, Entry{ZSet{}, 0, current_lru_clock()}).first;
+            is_new_entry = true;
+        } else if (!it->second.is_zset()) {
+            return CollectionStatus::WrongType;
+        }
+        size_t added_bytes = is_new_entry ? (112 + key.size()) : 0;
+        auto& zset = it->second.as_zset();
+        for (const auto& [member, score] : values) {
+            auto m_it = zset.find(member);
+            if (m_it == zset.end()) {
+                ++added;
+                added_bytes += 64 + member.size();
+                zset.emplace(member, score);
+            } else {
+                m_it->second = score;
+            }
+        }
+        if (added_bytes > 0) add_memory(added_bytes);
+        it->second.touch(current_lru_clock());
+        if (added) dirty_ += added;
+        return CollectionStatus::Success;
+    }
+
+    CollectionStatus zrem(const std::string& key, const std::vector<std::string>& values, size_t& removed) {
+        removed = 0;
+        size_t idx = shard_index(key);
+        auto& shard = shards_[idx];
+        std::unique_lock<std::shared_mutex> lock(shard.mutex);
+        auto it = shard.data.find(key);
+        if (it == shard.data.end()) return CollectionStatus::NotFound;
+        if (it->second.expire_at != 0 && it->second.expire_at <= current_time_ms()) return CollectionStatus::NotFound;
+        if (!it->second.is_zset()) return CollectionStatus::WrongType;
+        auto& zset = it->second.as_zset();
+        size_t removed_bytes = 0;
+        for (const auto& value : values) {
+            auto m_it = zset.find(value);
+            if (m_it != zset.end()) {
+                removed_bytes += 64 + m_it->first.size();
+                zset.erase(m_it);
+                ++removed;
+            }
+        }
+        if (zset.empty()) {
+            sub_memory(112 + key.size() + removed_bytes);
+            shard.data.erase(it);
+            shard.keys_with_ttl.erase(key);
+        } else if (removed_bytes > 0) {
+            sub_memory(removed_bytes);
+        }
+        if (removed) dirty_ += removed;
+        return CollectionStatus::Success;
+    }
+
+    CollectionStatus zrangebyscore(const std::string& key, double min_score, double max_score,
+                                   bool min_exclusive, bool max_exclusive,
+                                   std::vector<std::string>& values) {
+        values.clear();
+        size_t idx = shard_index(key);
+        auto& shard = shards_[idx];
+        std::shared_lock<std::shared_mutex> lock(shard.mutex);
+        auto it = shard.data.find(key);
+        if (it == shard.data.end() || (it->second.expire_at != 0 && it->second.expire_at <= current_time_ms())) return CollectionStatus::Success;
+        if (!it->second.is_zset()) return CollectionStatus::WrongType;
+        for (const auto& [member, score] : it->second.as_zset()) {
+            bool lower_ok = min_exclusive ? score > min_score : score >= min_score;
+            bool upper_ok = max_exclusive ? score < max_score : score <= max_score;
+            if (lower_ok && upper_ok) values.push_back(member);
+        }
+        std::sort(values.begin(), values.end(), [&](const std::string& a, const std::string& b) {
+            double sa = it->second.as_zset().at(a);
+            double sb = it->second.as_zset().at(b);
+            if (sa != sb) return sa < sb;
+            return a < b;
+        });
+        return CollectionStatus::Success;
+    }
+
+    CollectionStatus zscore(const std::string& key, const std::string& member, double& score) {
+        size_t idx = shard_index(key);
+        auto& shard = shards_[idx];
+        std::shared_lock<std::shared_mutex> lock(shard.mutex);
+        auto it = shard.data.find(key);
+        if (it == shard.data.end() || (it->second.expire_at != 0 && it->second.expire_at <= current_time_ms())) {
+            return CollectionStatus::NotFound;
+        }
+        if (!it->second.is_zset()) return CollectionStatus::WrongType;
+        const auto& zset = it->second.as_zset();
+        auto m_it = zset.find(member);
+        if (m_it == zset.end()) return CollectionStatus::NotFound;
+        score = m_it->second;
+        return CollectionStatus::Success;
     }
 
     template <typename Iter>
@@ -830,6 +1201,10 @@ public:
         }
 
         dirty_ += count;
+        list_generation_.fetch_add(1, std::memory_order_release);
+        list_cv_.notify_all();
+        lock.unlock();
+        notify_blocked_waiter_for_key(std::string(key));
         return ListPushStatus::Success;
     }
 
@@ -885,6 +1260,10 @@ public:
         }
 
         dirty_ += count;
+        list_generation_.fetch_add(1, std::memory_order_release);
+        list_cv_.notify_all();
+        lock.unlock();
+        notify_blocked_waiter_for_key(std::string(key));
         return ListPushStatus::Success;
     }
 
@@ -1090,6 +1469,145 @@ public:
 
         dirty_ += out_popped.size();
         return ListPopStatus::Success;
+    }
+
+    struct BlockedWaiter {
+        uint64_t client_id = 0;
+        int protocol = 2;
+        std::vector<std::string> keys;
+        std::chrono::steady_clock::time_point deadline;
+        bool has_deadline = false;
+        std::function<void(std::string)> sink;
+    };
+
+    BlockingPopStatus try_pop_keys(const std::vector<std::string>& keys,
+                                   std::string& selected_key, std::string& selected_value) {
+        selected_key.clear();
+        selected_value.clear();
+        for (const auto& key : keys) {
+            std::vector<std::string> values;
+            auto status = rpop(key, 1, values);
+            if (status == ListPopStatus::WrongType) return BlockingPopStatus::WrongType;
+            if (status == ListPopStatus::Success && !values.empty()) {
+                selected_key = key;
+                selected_value = std::move(values.front());
+                return BlockingPopStatus::Success;
+            }
+        }
+        return BlockingPopStatus::Timeout;
+    }
+
+    void register_blocked_pop(uint64_t client_id, int protocol,
+                              const std::vector<std::string>& keys,
+                              uint64_t timeout_seconds,
+                              std::function<void(std::string)> sink) {
+        std::lock_guard<std::mutex> lock(blocked_mutex_);
+        for (auto it = blocked_waiters_.begin(); it != blocked_waiters_.end();) {
+            if (it->client_id == client_id) it = blocked_waiters_.erase(it);
+            else ++it;
+        }
+        BlockedWaiter waiter;
+        waiter.client_id = client_id;
+        waiter.protocol = protocol;
+        waiter.keys = keys;
+        waiter.sink = std::move(sink);
+        if (timeout_seconds > 0) {
+            waiter.has_deadline = true;
+            waiter.deadline = std::chrono::steady_clock::now() + std::chrono::seconds(timeout_seconds);
+        } else {
+            waiter.has_deadline = false;
+        }
+        blocked_waiters_.push_back(std::move(waiter));
+    }
+
+    void cancel_blocked_pop(uint64_t client_id) {
+        std::lock_guard<std::mutex> lock(blocked_mutex_);
+        for (auto it = blocked_waiters_.begin(); it != blocked_waiters_.end();) {
+            if (it->client_id == client_id) it = blocked_waiters_.erase(it);
+            else ++it;
+        }
+    }
+
+    void notify_blocked_waiter_for_key(const std::string& key) {
+        std::function<void(std::string)> to_deliver;
+        std::string response_frame;
+        {
+            std::lock_guard<std::mutex> lock(blocked_mutex_);
+            for (auto it = blocked_waiters_.begin(); it != blocked_waiters_.end(); ++it) {
+                bool watches_key = false;
+                for (const auto& k : it->keys) {
+                    if (k == key) { watches_key = true; break; }
+                }
+                if (!watches_key) continue;
+
+                std::string popped_key, popped_val;
+                auto status = try_pop_keys(it->keys, popped_key, popped_val);
+                if (status == BlockingPopStatus::Success) {
+                    to_deliver = std::move(it->sink);
+                    Resp::append_array_header(response_frame, 2);
+                    Resp::append_bulk_string(response_frame, popped_key);
+                    Resp::append_bulk_string(response_frame, popped_val);
+                    blocked_waiters_.erase(it);
+                    break;
+                }
+            }
+        }
+        if (to_deliver && !response_frame.empty()) {
+            to_deliver(std::move(response_frame));
+        }
+    }
+
+    void check_blocked_pop_timeouts() {
+        std::vector<std::pair<std::function<void(std::string)>, std::string>> expired_deliveries;
+        auto now = std::chrono::steady_clock::now();
+        {
+            std::lock_guard<std::mutex> lock(blocked_mutex_);
+            for (auto it = blocked_waiters_.begin(); it != blocked_waiters_.end();) {
+                if (it->has_deadline && now >= it->deadline) {
+                    std::string null_frame;
+                    Resp::append_null_array(null_frame, it->protocol);
+                    if (it->sink) {
+                        expired_deliveries.emplace_back(std::move(it->sink), std::move(null_frame));
+                    }
+                    it = blocked_waiters_.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+        }
+        for (auto& delivery : expired_deliveries) {
+            delivery.first(std::move(delivery.second));
+        }
+    }
+
+    BlockingPopStatus brpop(const std::vector<std::string>& keys, uint64_t timeout_seconds,
+                            std::string& selected_key, std::string& selected_value) {
+        auto status = try_pop_keys(keys, selected_key, selected_value);
+        if (status != BlockingPopStatus::Timeout) return status;
+
+        std::unique_lock<std::mutex> wait_lock(list_cv_mutex_);
+        uint64_t observed_generation = list_generation_.load(std::memory_order_acquire);
+        if (timeout_seconds == 0) {
+            while (true) {
+                list_cv_.wait(wait_lock, [&]() {
+                    return list_generation_.load(std::memory_order_acquire) != observed_generation;
+                });
+                observed_generation = list_generation_.load(std::memory_order_acquire);
+                status = try_pop_keys(keys, selected_key, selected_value);
+                if (status != BlockingPopStatus::Timeout) return status;
+            }
+        }
+
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(timeout_seconds);
+        while (std::chrono::steady_clock::now() < deadline) {
+            if (!list_cv_.wait_until(wait_lock, deadline, [&]() {
+                    return list_generation_.load(std::memory_order_acquire) != observed_generation;
+                })) break;
+            observed_generation = list_generation_.load(std::memory_order_acquire);
+            status = try_pop_keys(keys, selected_key, selected_value);
+            if (status != BlockingPopStatus::Timeout) return status;
+        }
+        return BlockingPopStatus::Timeout;
     }
 
     ListLenStatus llen(const std::string& key, size_t& out_len) {
@@ -1537,10 +2055,8 @@ public:
             return result;
         }
 
-        bool match_prefix = (!pattern.empty() && pattern.back() == '*');
-        bool match_suffix = (!pattern.empty() && pattern.front() == '*');
-
-        if (!match_prefix && !match_suffix) {
+        bool has_wildcard = (pattern.find_first_of("*?[") != std::string::npos);
+        if (!has_wildcard) {
             size_t idx = shard_index(pattern);
             auto& shard = shards_[idx];
             std::shared_lock<std::shared_mutex> lock(shard.mutex);
@@ -1551,34 +2067,54 @@ public:
             return result;
         }
 
-        std::string core = pattern;
-        if (match_prefix && match_suffix && pattern.size() > 2) {
-            core = pattern.substr(1, pattern.size() - 2);
+        // Fast path for simple prefix "foo*"
+        if (pattern.back() == '*' && pattern.front() != '*' && pattern.find_first_of("*?[") == pattern.size() - 1) {
+            std::string prefix = pattern.substr(0, pattern.size() - 1);
             for (const auto& shard : shards_) {
                 std::shared_lock<std::shared_mutex> lock(shard.mutex);
                 for (const auto& [k, v] : shard.data) {
                     if (v.expire_at != 0 && v.expire_at <= now) continue;
-                    if (k.find(core) != std::string::npos) result.push_back(k);
+                    if (k.rfind(prefix, 0) == 0) result.push_back(k);
                 }
             }
-        } else if (match_prefix) {
-            core = pattern.substr(0, pattern.size() - 1);
+            return result;
+        }
+
+        // Fast path for simple suffix "*foo"
+        if (pattern.front() == '*' && pattern.back() != '*' && pattern.rfind('*') == 0 && pattern.find_first_of("?[") == std::string::npos) {
+            std::string suffix = pattern.substr(1);
             for (const auto& shard : shards_) {
                 std::shared_lock<std::shared_mutex> lock(shard.mutex);
                 for (const auto& [k, v] : shard.data) {
                     if (v.expire_at != 0 && v.expire_at <= now) continue;
-                    if (k.rfind(core, 0) == 0) result.push_back(k);
-                }
-            }
-        } else if (match_suffix) {
-            core = pattern.substr(1);
-            for (const auto& shard : shards_) {
-                std::shared_lock<std::shared_mutex> lock(shard.mutex);
-                for (const auto& [k, v] : shard.data) {
-                    if (v.expire_at != 0 && v.expire_at <= now) continue;
-                    if (k.size() >= core.size() && k.compare(k.size() - core.size(), core.size(), core) == 0) {
+                    if (k.size() >= suffix.size() && k.compare(k.size() - suffix.size(), suffix.size(), suffix) == 0) {
                         result.push_back(k);
                     }
+                }
+            }
+            return result;
+        }
+
+        // Fast path for simple substring "*foo*"
+        if (pattern.front() == '*' && pattern.back() == '*' && pattern.size() > 2 && pattern.find_first_of("*?[", 1) == pattern.size() - 1) {
+            std::string substr = pattern.substr(1, pattern.size() - 2);
+            for (const auto& shard : shards_) {
+                std::shared_lock<std::shared_mutex> lock(shard.mutex);
+                for (const auto& [k, v] : shard.data) {
+                    if (v.expire_at != 0 && v.expire_at <= now) continue;
+                    if (k.find(substr) != std::string::npos) result.push_back(k);
+                }
+            }
+            return result;
+        }
+
+        // General glob matching for patterns like "user:*:profile" or "[a-z]*"
+        for (const auto& shard : shards_) {
+            std::shared_lock<std::shared_mutex> lock(shard.mutex);
+            for (const auto& [k, v] : shard.data) {
+                if (v.expire_at != 0 && v.expire_at <= now) continue;
+                if (constants::glob_match(pattern, k)) {
+                    result.push_back(k);
                 }
             }
         }
@@ -1787,7 +2323,7 @@ public:
             while (active_eviction_running_) {
                 {
                     std::unique_lock<std::mutex> lk(eviction_cv_mutex_);
-                    eviction_cv_.wait_for(lk, std::chrono::milliseconds(constants::DEFAULT_EVICTION_INTERVAL_MS), [this]() {
+                    eviction_cv_.wait_for(lk, std::chrono::milliseconds(50), [this]() {
                         return !active_eviction_running_.load();
                     });
                 }
@@ -1795,6 +2331,7 @@ public:
                     break;
                 }
                 evict_expired();
+                check_blocked_pop_timeouts();
             }
         });
     }
@@ -1839,10 +2376,41 @@ public:
                     expire_at_wall = now_wall + remaining_ms;
                 }
                 if (v.is_string()) {
-                    result.push_back({k, EntryType::String, v.as_string(), {}, expire_at_wall});
+                    DumpEntry dump;
+                    dump.key = k;
+                    dump.type = EntryType::String;
+                    dump.string_val = v.as_string();
+                    dump.expire_at_epoch_ms = expire_at_wall;
+                    result.push_back(std::move(dump));
                 } else if (v.is_list()) {
                     std::vector<std::string> elements(v.as_list().begin(), v.as_list().end());
-                    result.push_back({k, EntryType::List, "", std::move(elements), expire_at_wall});
+                    DumpEntry dump;
+                    dump.key = k;
+                    dump.type = EntryType::List;
+                    dump.list_val = std::move(elements);
+                    dump.expire_at_epoch_ms = expire_at_wall;
+                    result.push_back(std::move(dump));
+                } else if (v.is_hash()) {
+                    DumpEntry dump;
+                    dump.key = k;
+                    dump.type = EntryType::Hash;
+                    dump.hash_val.assign(v.as_hash().begin(), v.as_hash().end());
+                    dump.expire_at_epoch_ms = expire_at_wall;
+                    result.push_back(std::move(dump));
+                } else if (v.is_set()) {
+                    DumpEntry dump;
+                    dump.key = k;
+                    dump.type = EntryType::Set;
+                    dump.set_val.assign(v.as_set().begin(), v.as_set().end());
+                    dump.expire_at_epoch_ms = expire_at_wall;
+                    result.push_back(std::move(dump));
+                } else if (v.is_zset()) {
+                    DumpEntry dump;
+                    dump.key = k;
+                    dump.type = EntryType::ZSet;
+                    dump.zset_val.assign(v.as_zset().begin(), v.as_zset().end());
+                    dump.expire_at_epoch_ms = expire_at_wall;
+                    result.push_back(std::move(dump));
                 }
             }
         }
@@ -1907,11 +2475,60 @@ public:
         }
     }
 
+    void restore_hash_entry(const std::string& key, const std::vector<std::pair<std::string, std::string>>& fields,
+                            uint64_t expire_at_epoch_ms) {
+        if (fields.empty()) return;
+        Hash hash;
+        for (const auto& pair : fields) hash.emplace(pair);
+        restore_collection_entry(key, Entry{std::move(hash)}, expire_at_epoch_ms);
+    }
+
+    void restore_set_entry(const std::string& key, const std::vector<std::string>& values,
+                           uint64_t expire_at_epoch_ms) {
+        if (values.empty()) return;
+        Set set(values.begin(), values.end());
+        restore_collection_entry(key, Entry{std::move(set)}, expire_at_epoch_ms);
+    }
+
+    void restore_zset_entry(const std::string& key, const std::vector<std::pair<std::string, double>>& values,
+                            uint64_t expire_at_epoch_ms) {
+        if (values.empty()) return;
+        ZSet zset;
+        for (const auto& pair : values) zset[pair.first] = pair.second;
+        restore_collection_entry(key, Entry{std::move(zset)}, expire_at_epoch_ms);
+    }
+
     void restore_entry(const std::string& key, const std::string& value, uint64_t expire_at_epoch_ms) {
         restore_string_entry(key, value, expire_at_epoch_ms);
     }
 
 private:
+    void restore_collection_entry(const std::string& key, Entry entry, uint64_t expire_at_epoch_ms) {
+        size_t idx = shard_index(key);
+        auto& shard = shards_[idx];
+        std::unique_lock<std::shared_mutex> lock(shard.mutex);
+        auto it = shard.data.find(key);
+        if (it != shard.data.end()) sub_memory(estimate_entry_memory(key, it->second));
+        if (expire_at_epoch_ms == 0) {
+            entry.expire_at = 0;
+            entry.touch(current_lru_clock());
+            shard.data[key] = std::move(entry);
+            shard.keys_with_ttl.erase(key);
+        } else {
+            uint64_t now_wall = wall_time_ms();
+            if (expire_at_epoch_ms <= now_wall) {
+                shard.data.erase(key);
+                shard.keys_with_ttl.erase(key);
+                return;
+            }
+            entry.expire_at = current_time_ms() + (expire_at_epoch_ms - now_wall);
+            entry.touch(current_lru_clock());
+            shard.data[key] = std::move(entry);
+            shard.keys_with_ttl.insert(key);
+        }
+        add_memory(estimate_entry_memory(key, shard.data.at(key)));
+    }
+
     IncrStatus modify_int(std::string_view key, int64_t delta, int64_t& result_val, bool is_decrement) {
         size_t idx = shard_index(key);
         auto& shard = shards_[idx];
@@ -1993,6 +2610,11 @@ private:
     std::thread eviction_thread_;
     std::mutex eviction_cv_mutex_;
     std::condition_variable eviction_cv_;
+    std::mutex list_cv_mutex_;
+    std::condition_variable list_cv_;
+    std::atomic<uint64_t> list_generation_{0};
+    std::mutex blocked_mutex_;
+    std::list<BlockedWaiter> blocked_waiters_;
     std::atomic<size_t> used_memory_{0};
     std::atomic<size_t> used_memory_peak_{0};
     std::atomic<size_t> maxmemory_{0};
