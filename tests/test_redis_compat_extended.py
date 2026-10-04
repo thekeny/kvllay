@@ -13,10 +13,33 @@ def test_redis_compat_extended(port=6389):
     assert client.hsetnx("call:session:1", "status", "active") == 0
     assert client.hget("call:session:1", "status") == "ringing"
     assert client.hgetall("call:session:1")["p:user"] == "joined"
+    assert set(client.hvals("call:session:1")) == {"ringing", "joined"}
     assert client.hlen("call:session:1") == 2
     assert client.hdel("call:session:1", "p:user") == 1
     assert client.hdel("call:session:1", "nonexistent") == 0
     assert client.hlen("call:session:1") == 1
+    assert client.hvals("call:session:1") == ["ringing"]
+    assert client.hvals("nonexistent:hash") == []
+
+    # HVALS error handling (wrongtype, wrong arg count)
+    client.set("scalar_key", "string_val")
+    try:
+        client.hvals("scalar_key")
+        assert False, "HVALS on non-hash key must fail"
+    except redis.exceptions.ResponseError as e:
+        assert "WRONGTYPE" in str(e)
+
+    try:
+        client.execute_command("HVALS")
+        assert False, "HVALS without arguments must fail"
+    except redis.exceptions.ResponseError as e:
+        assert "wrong number of arguments" in str(e)
+
+    try:
+        client.execute_command("HVALS", "arg1", "arg2")
+        assert False, "HVALS with too many arguments must fail"
+    except redis.exceptions.ResponseError as e:
+        assert "wrong number of arguments" in str(e)
 
     # Empty collection TTL cleanup
     client.hset("temp:hash", "f1", "v1")

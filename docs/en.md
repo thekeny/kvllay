@@ -182,7 +182,21 @@ Lists in `kvllay` are implemented using a cache-friendly double-ended queue buff
 > 3. **Automatic Cleanup**: When a list becomes empty after `LPOP` or `RPOP`, the key and its expiration timer are automatically evicted from memory.
 > 4. **Strict Type Safety (`WRONGTYPE`)**: Invoking string commands (`GET`, `INCR`) on list keys or list commands on string keys strictly returns `-WRONGTYPE Operation against a key holding the wrong kind of value`.
 
-### 3.6 Database Administration & Diagnostics
+### 3.6 Hashes (Hash Tables)
+
+Hashes in `kvllay` represent maps between string fields and string values (`std::unordered_map<std::string, std::string>`).
+
+| Command | Description | Example | Response |
+| :--- | :--- | :--- | :--- |
+| `HSET key field val [f v ...]` | Sets field(s) in a hash | `HSET user:1 name "Alex" role "admin"` | `:<added_count>\r\n` |
+| `HSETNX key field value` | Sets field only if it does not already exist | `HSETNX user:1 name "Bob"` | `:1\r\n` (or `:0\r\n`) |
+| `HGET key field` | Returns value associated with field | `HGET user:1 name` | `"$4\r\nAlex\r\n"` |
+| `HGETALL key` | Returns all fields and values in the hash | `HGETALL user:1` | `*<count*2>\r\n...` |
+| `HVALS key` | Returns all values in the hash | `HVALS user:1` | `*<count>\r\n...` |
+| `HDEL key field [field ...]` | Removes field(s) from the hash | `HDEL user:1 role` | `:<removed_count>\r\n` |
+| `HLEN key` | Returns number of fields in the hash | `HLEN user:1` | `:<count>\r\n` |
+
+### 3.7 Database Administration & Diagnostics
 
 | Command | Description | Example | Response |
 | :--- | :--- | :--- | :--- |

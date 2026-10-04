@@ -453,7 +453,22 @@ private:
         const std::string_view cmd = args[0];
 
         if (iequals(cmd, "HSET") || iequals(cmd, "HSETNX") || iequals(cmd, "HGET") ||
-            iequals(cmd, "HGETALL") || iequals(cmd, "HDEL") || iequals(cmd, "HLEN")) {
+            iequals(cmd, "HGETALL") || iequals(cmd, "HDEL") || iequals(cmd, "HLEN") ||
+            iequals(cmd, "HVALS")) {
+            if (iequals(cmd, "HVALS")) {
+                if (args.size() != 2) {
+                    Resp::append_error(out, "wrong number of arguments for 'hvals' command");
+                    return true;
+                }
+                std::vector<std::string> values;
+                auto status = store_.hvals(std::string(args[1]), values);
+                if (status == Store::CollectionStatus::WrongType) append_wrongtype(out);
+                else {
+                    Resp::append_array_header(out, values.size());
+                    for (const auto& value : values) Resp::append_bulk_string(out, value);
+                }
+                return true;
+            }
             if (args.size() < 2) {
                 Resp::append_error(out, "wrong number of arguments");
                 return true;

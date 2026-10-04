@@ -39,6 +39,7 @@ Compatible with standard `redis-cli` and official client SDK libraries for any p
   - `LPUSH key value [value ...]` / `RPUSH key value [value ...]`
   - `LPOP key [count]` / `RPOP key [count]`
   - `LLEN key` / `LRANGE key start stop` / `LINDEX key index`
+  - `HSET` / `HSETNX` / `HGET` / `HGETALL` / `HVALS` / `HDEL` / `HLEN` (Hashes)
   - `TYPE key`
   - `SELECT index`
   - `SAVE` (synchronous snapshot)

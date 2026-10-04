@@ -986,6 +986,22 @@ public:
         return CollectionStatus::Success;
     }
 
+    CollectionStatus hvals(const std::string& key, std::vector<std::string>& values) {
+        values.clear();
+        size_t idx = shard_index(key);
+        auto& shard = shards_[idx];
+        std::shared_lock<std::shared_mutex> lock(shard.mutex);
+        auto it = shard.data.find(key);
+        if (it == shard.data.end() || (it->second.expire_at != 0 && it->second.expire_at <= current_time_ms())) {
+            return CollectionStatus::NotFound;
+        }
+        if (!it->second.is_hash()) return CollectionStatus::WrongType;
+        it->second.touch(current_lru_clock());
+        values.reserve(it->second.as_hash().size());
+        for (const auto& pair : it->second.as_hash()) values.push_back(pair.second);
+        return CollectionStatus::Success;
+    }
+
     CollectionStatus sadd(const std::string& key, const std::vector<std::string>& values, size_t& added) {
         added = 0;
         size_t idx = shard_index(key);

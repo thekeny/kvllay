@@ -119,6 +119,13 @@
   - `LRANGE key start stop`: Returns elements from start to stop (supports negative indexes).
   - `LINDEX key index`: Returns element by 0-based or negative index.
   - `TYPE key`: Returns type of key (`string`, `list`, or `none`).
+  - `HSET key field value [field value ...]`: Sets field(s) in a hash, returns count of added fields.
+  - `HSETNX key field value`: Sets field only if it does not already exist, returns 1 or 0.
+  - `HGET key field`: Returns value associated with field in hash.
+  - `HGETALL key`: Returns all fields and values of the hash.
+  - `HVALS key`: Returns all values in the hash.
+  - `HDEL key field [field ...]`: Removes field(s) from hash, returns count of removed fields.
+  - `HLEN key`: Returns number of fields in the hash.
   - `SELECT index`: Selects logical database (supports default DB 0, returns `-ERR DB index is out of range` for out-of-range indexes).
   - `CONFIG GET parameter`: Retrieves configuration parameter (`maxmemory`, `maxmemory-policy`, or `*`).
   - `CONFIG SET parameter value`: Dynamically sets configuration (`maxmemory`, `maxmemory-policy`).
