@@ -45,7 +45,6 @@ class MinimalCDPClient:
         msg = json.dumps({"id": self._id, "method": method, "params": params or {}})
         payload = msg.encode("utf-8")
 
-        # WebSocket frame: FIN=1, opcode=1 (text), masked=1
         frame = bytearray([0x81])
         length = len(payload)
         mask = os.urandom(4)
@@ -146,7 +145,6 @@ def render_all_charts():
     proc = subprocess.Popen(chrome_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     cdp = None
     try:
-        # Wait for debugging port
         for _ in range(30):
             time.sleep(0.2)
             try:
@@ -168,7 +166,6 @@ def render_all_charts():
         cdp.send_command("Page.enable")
         cdp.send_command("Page.navigate", {"url": f"file://{html_file}"})
 
-        # Set viewport with 2x Device Scale Factor (for 1560px width Retina clarity)
         cdp.send_command(
             "Emulation.setDeviceMetricsOverride",
             {
@@ -179,7 +176,6 @@ def render_all_charts():
             },
         )
 
-        # Allow fonts and layout to finish painting
         time.sleep(1.5)
 
         charts = [

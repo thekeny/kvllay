@@ -145,7 +145,7 @@ REMOTE_URL=$(echo "$REMOTE_URL" | sed -E 's|^git@github\.com:|https://github.com
 
 echo -e "\n${BOLD}${GREEN}=================================================="
 echo "           Release Published Successfully! 🎉     "
-echo "==================================================${NC}"
+echo "================================================== ${NC}"
 echo -e "Tag:            ${BOLD}${TAG}${NC}"
 echo -e "GitHub Actions: ${CYAN}${REMOTE_URL}/actions${NC}"
 echo -e "GitHub Release: ${CYAN}${REMOTE_URL}/releases${NC}\n"

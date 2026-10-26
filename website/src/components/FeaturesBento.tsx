@@ -37,17 +37,12 @@ export function FeaturesBento() {
   ]
 
   return (
-    <section id={paths.sections.features} className="w-full flex flex-col items-center py-10 sm:py-16 px-4 sm:px-6 lg:px-10 max-w-[1240px] mx-auto scroll-mt-20">
+    <section id={paths.sections.features} className="w-full flex flex-col items-center py-8 sm:py-12 px-4 sm:px-6 lg:px-10 max-w-[1240px] mx-auto scroll-mt-20">
       <Reveal direction="up" className="flex flex-col items-center text-center gap-2.5 sm:gap-3 mb-8 sm:mb-12">
-        <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[#00D2FF]/10 border border-[#00D2FF]/30">
-          <span className="text-[11px] font-mono font-bold text-[#00D2FF] tracking-wider uppercase">
-            ENGINEERING ARCHITECTURE
-          </span>
-        </div>
-        <h2 className="text-2xl sm:text-3xl lg:text-[38px] font-bold text-[#F0F6FC] tracking-tight">
+        <h2 className="text-2xl sm:text-3xl lg:text-[38px] font-bold text-text-primary tracking-tight">
           Built for Speed, Simplicity &amp; Reliability
         </h2>
-        <p className="text-sm sm:text-base text-[#8B9BB4] max-w-[780px] leading-[1.6]">
+        <p className="text-base text-text-secondary max-w-[65ch] leading-[1.6]">
           Every subsystem is hand-crafted in modern C++17 to eliminate bloat, guarantee safety, and deliver predictable ultra-low latency.
         </p>
       </Reveal>
@@ -57,12 +52,12 @@ export function FeaturesBento() {
           const Icon = item.icon
           return (
             <Reveal key={item.title} direction="up" delay={idx * 60} className="h-full">
-              <div className="h-full bg-[#0E131F] border border-[#1B2436] hover:border-[#1E3B5C] rounded-xl p-4 sm:p-6 flex flex-col justify-start gap-2.5 sm:gap-3.5 transition-colors shadow-sm group">
-                <div className="w-9 h-9 rounded-lg bg-[#0A0E17] border border-[#1B2436] group-hover:border-[#00D2FF]/40 flex items-center justify-center transition-colors">
-                  <Icon className="size-4.5 text-[#00D2FF]" />
+              <div className="h-full bg-surface-card rounded-xl p-5 sm:p-6 flex flex-col justify-start gap-2.5 sm:gap-3.5 transition-colors group">
+                <div className="w-9 h-9 rounded-lg bg-surface-subtle flex items-center justify-center transition-colors">
+                  <Icon className="size-4.5 text-accent-cyan" />
                 </div>
-                <h3 className="text-[16px] sm:text-[17px] font-bold text-[#F0F6FC]">{item.title}</h3>
-                <p className="text-[13px] sm:text-[13.5px] text-[#8B9BB4] leading-[1.55]">{item.desc}</p>
+                <h3 className="text-[16px] sm:text-[17px] font-bold text-text-primary">{item.title}</h3>
+                <p className="text-base text-text-secondary leading-[1.55]">{item.desc}</p>
               </div>
             </Reveal>
           )

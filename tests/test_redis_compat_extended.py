@@ -8,29 +8,47 @@ def test_redis_compat_extended(port=6389):
     client = redis.Redis(host="127.0.0.1", port=port, decode_responses=True, socket_timeout=3)
     client.flushdb()
 
-    # --- Hash operations ---
     assert client.hset("call:session:1", mapping={"status": "ringing", "p:user": "joined"}) == 2
     assert client.hsetnx("call:session:1", "status", "active") == 0
     assert client.hget("call:session:1", "status") == "ringing"
     assert client.hgetall("call:session:1")["p:user"] == "joined"
+    assert set(client.hvals("call:session:1")) == {"ringing", "joined"}
     assert client.hlen("call:session:1") == 2
     assert client.hdel("call:session:1", "p:user") == 1
     assert client.hdel("call:session:1", "nonexistent") == 0
     assert client.hlen("call:session:1") == 1
+    assert client.hvals("call:session:1") == ["ringing"]
+    assert client.hvals("nonexistent:hash") == []
 
-    # Empty collection TTL cleanup
+    client.set("scalar_key", "string_val")
+    try:
+        client.hvals("scalar_key")
+        assert False, "HVALS on non-hash key must fail"
+    except redis.exceptions.ResponseError as e:
+        assert "WRONGTYPE" in str(e)
+
+    try:
+        client.execute_command("HVALS")
+        assert False, "HVALS without arguments must fail"
+    except redis.exceptions.ResponseError as e:
+        assert "wrong number of arguments" in str(e)
+
+    try:
+        client.execute_command("HVALS", "arg1", "arg2")
+        assert False, "HVALS with too many arguments must fail"
+    except redis.exceptions.ResponseError as e:
+        assert "wrong number of arguments" in str(e)
+
     client.hset("temp:hash", "f1", "v1")
     client.expire("temp:hash", 60)
     assert client.hdel("temp:hash", "f1") == 1
     assert client.exists("temp:hash") == 0
     assert client.ttl("temp:hash") == -2
 
-    # --- Set operations ---
     assert client.sadd("call:voip:1", "APNS|token", "FCM|token2") == 2
     assert client.srem("call:voip:1", "FCM|missing") == 0
     assert client.smembers("call:voip:1") == {"APNS|token", "FCM|token2"}
 
-    # --- Sorted Set operations including ZSCORE ---
     assert client.zadd("call:deadlines", {"session|user": 10.5, "later|user": 20.25}) == 2
     assert client.zscore("call:deadlines", "later|user") == 20.25
     assert client.zscore("call:deadlines", "nonexistent") is None
@@ -38,7 +56,6 @@ def test_redis_compat_extended(port=6389):
     assert client.zrem("call:deadlines", "session|user") == 1
     assert client.zscore("call:deadlines", "session|user") is None
 
-    # --- Expire & Glob Pattern Matching ---
     assert client.expire("call:session:1", 10) is True
     assert client.ttl("call:session:1") > 0
     assert "call:session:1" in set(client.scan_iter(match="call:session:*"))
@@ -49,7 +66,6 @@ def test_redis_compat_extended(port=6389):
     keys_matched = set(client.keys("user:*:profile"))
     assert keys_matched == {"user:101:profile", "user:202:profile"}, f"Glob match failed: {keys_matched}"
 
-    # --- Concurrent Non-blocking BRPOP ---
     popped_1 = []
     popped_2 = []
 
@@ -64,7 +80,6 @@ def test_redis_compat_extended(port=6389):
     t2.start()
     time.sleep(0.15)
 
-    # Producer pushes to both queues while workers are blocked
     assert client.lpush("queue_a", "payload_a") == 1
     assert client.lpush("queue_b", "payload_b") == 1
 
@@ -74,7 +89,6 @@ def test_redis_compat_extended(port=6389):
     assert popped_1 == [("queue_a", "payload_a")], f"worker 1 got {popped_1}"
     assert popped_2 == [("queue_b", "payload_b")], f"worker 2 got {popped_2}"
 
-    # --- Pub/Sub with exact channel name and pattern matching ---
     pubsub = client.pubsub()
     pubsub.psubscribe("events:*")
     subscription = pubsub.get_message(timeout=2)
@@ -85,7 +99,6 @@ def test_redis_compat_extended(port=6389):
     assert message["channel"] == "events:user-1"
     assert message["data"] == "hello"
 
-    # Direct subscribe
     pubsub2 = client.pubsub()
     pubsub2.subscribe("direct_chan")
     sub2_ack = pubsub2.get_message(timeout=2)

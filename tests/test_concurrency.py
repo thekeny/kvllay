@@ -8,17 +8,15 @@ from common import send_recv, server_binary, wait_for_server
 
 def test_event_loop_and_high_concurrency(port=6389):
     print(f"\n--- Testing Event Loop & High Concurrency on port {port} ---")
-    
-    # 1. Pipelining test: Send 100 commands in a single TCP write
+
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.connect(("127.0.0.1", port))
-    
+
     pipeline_cmds = ""
     for i in range(100):
         pipeline_cmds += f"SET pipe_k_{i} val_{i}\r\n"
     s.sendall(pipeline_cmds.encode('utf-8'))
-    
-    # Read until we get 100 +OK responses
+
     resp_buf = ""
     while resp_buf.count("+OK\r\n") < 100:
         chunk = s.recv(4096).decode('utf-8')
@@ -27,18 +25,16 @@ def test_event_loop_and_high_concurrency(port=6389):
         resp_buf += chunk
     assert resp_buf.count("+OK\r\n") == 100, f"Expected 100 +OK responses, got {resp_buf.count('+OK\\r\\n')}"
     print("[PASS] Event Loop pipelining: 100 commands parsed and responded in exact order")
-    
-    # Verify values
+
     for i in range(0, 100, 20):
         res = send_recv(s, f"GET pipe_k_{i}\r\n")
         assert res == f"${len(f'val_{i}')}\r\nval_{i}\r\n", f"Mismatch for pipe_k_{i}: {res}"
     s.close()
-    
-    # 2. High concurrency test: 50 concurrent client threads
+
     num_clients = 50
     ops_per_client = 60
     errors = []
-    
+
     def client_worker(worker_id):
         try:
             cs = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -58,14 +54,13 @@ def test_event_loop_and_high_concurrency(port=6389):
             cs.close()
         except Exception as e:
             errors.append(f"Worker {worker_id} exception: {e}")
-            
+
     threads = [threading.Thread(target=client_worker, args=(i,)) for i in range(num_clients)]
     for t in threads: t.start()
     for t in threads: t.join()
     assert len(errors) == 0, f"High concurrency errors ({len(errors)}): {errors[:5]}"
     print(f"[PASS] Event Loop Multi-Reactor: {num_clients} concurrent clients x {ops_per_client} ops = {num_clients * ops_per_client * 2} ops succeeded with 0 errors")
-    
-    # 3. Connection churn test: 200 short-lived connections
+
     churn_errors = []
     for i in range(200):
         try:
@@ -79,8 +74,7 @@ def test_event_loop_and_high_concurrency(port=6389):
             churn_errors.append(f"Churn {i} exception: {e}")
     assert len(churn_errors) == 0, f"Connection churn errors: {churn_errors}"
     print("[PASS] Connection Churn: 200 short-lived connections opened, served, and cleanly closed")
-    
-    # 4. Test CLI flag --threads / --io-threads
+
     cli_port = port + 25
     proc = subprocess.Popen([
         server_binary(),
@@ -90,7 +84,7 @@ def test_event_loop_and_high_concurrency(port=6389):
         "--no-aof"
     ], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     wait_for_server(cli_port)
-    
+
     try:
         cli_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         cli_sock.connect(("127.0.0.1", cli_port))
@@ -101,5 +95,5 @@ def test_event_loop_and_high_concurrency(port=6389):
     finally:
         proc.terminate()
         proc.wait()
-        
+
     print("[PASS] All Event Loop & High Concurrency tests passed successfully!")

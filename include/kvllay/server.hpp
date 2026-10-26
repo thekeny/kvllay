@@ -51,9 +51,6 @@
 
 namespace kvllay {
 
-// Signal handlers may only perform async-signal-safe operations.  The handler
-// therefore sets a sig_atomic_t flag and leaves all shutdown work to the main
-// server loop.
 namespace shutdown_signal {
 
 inline volatile std::sig_atomic_t requested = 0;
@@ -86,15 +83,13 @@ inline void install() noexcept {
     struct sigaction action{};
     sigemptyset(&action.sa_mask);
     action.sa_handler = handler;
-    // Deliberately do not use SA_RESTART: if a platform still blocks in a
-    // socket call, SIGINT/SIGTERM must be allowed to wake it up.
     action.sa_flags = 0;
     sigaction(SIGINT, &action, nullptr);
     sigaction(SIGTERM, &action, nullptr);
 #endif
 }
 
-} // namespace shutdown_signal
+}
 
 struct ServerConfig {
     int port = constants::DEFAULT_PORT;
@@ -153,7 +148,7 @@ public:
             if (!aof_mgr_.start()) {
                 std::cerr << "[kvllay] Warning: Failed to start AOF background writer" << std::endl;
             } else {
-                std::cout << "[kvllay] AOF persistence enabled (" << config_.aof_path << ", fsync: " 
+                std::cout << "[kvllay] AOF persistence enabled (" << config_.aof_path << ", fsync: "
                           << fsync_policy_to_string(config_.aof_fsync_policy) << ")" << std::endl;
             }
         }
@@ -165,7 +160,7 @@ public:
 
         if (config_.snapshot_enabled && config_.save_interval_secs > 0) {
             snapshot_mgr_.start_auto_save(store_);
-            std::cout << "[kvllay] Auto-save enabled (every " << config_.save_interval_secs << "s if >= " 
+            std::cout << "[kvllay] Auto-save enabled (every " << config_.save_interval_secs << "s if >= "
                       << config_.save_changes << " changes)" << std::endl;
         }
 
@@ -305,8 +300,6 @@ public:
             }
         }
 
-        // stop() is idempotent, so this also covers an external stop() call
-        // racing with the accept loop.
         stop();
     }
 
@@ -387,4 +380,4 @@ private:
 
 }
 
-#endif // KVLLAY_SERVER_HPP
+#endif

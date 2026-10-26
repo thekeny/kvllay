@@ -9,7 +9,6 @@ def test_extended_persistence(port=6389):
     print(f"\n--- Testing Extended Persistence (Hash, Set, ZSet, TTL across Snapshot & AOF) on port {port} ---")
     import redis
 
-    # 1. Snapshot lifecycle test for Hash, Set, ZSet
     snap_port = port + 8
     snap_file = "test_ext_snap.kvl"
     if os.path.exists(snap_file):
@@ -32,7 +31,6 @@ def test_extended_persistence(port=6389):
     assert os.path.exists(snap_file)
     assert os.path.getsize(snap_file) > 28
 
-    # Restart and verify
     p_snap2 = subprocess.Popen([server_binary(), "-p", str(snap_port), "--snapshot", snap_file, "--no-aof"])
     wait_for_server(snap_port)
     try:
@@ -52,7 +50,6 @@ def test_extended_persistence(port=6389):
         if os.path.exists(snap_file):
             os.remove(snap_file)
 
-    # 2. AOF lifecycle test with BGREWRITEAOF for Hash, Set, ZSet
     aof_port = port + 9
     aof_file = "test_ext_aof.aof"
     if os.path.exists(aof_file):
@@ -69,11 +66,9 @@ def test_extended_persistence(port=6389):
         ra1.zadd("call:timeouts", {"user1": 1500.125, "user2": 3000.5})
         ra1.expire("call:session:aof", 300)
 
-        # Trigger rewrite while running
         ra1.bgrewriteaof()
         time.sleep(0.3)
 
-        # Add more mutations after rewrite
         ra1.hset("call:session:aof", "state", "active")
         ra1.zrem("call:timeouts", "user1")
         ra1.close()
@@ -83,7 +78,6 @@ def test_extended_persistence(port=6389):
 
     assert os.path.exists(aof_file)
 
-    # Restart and verify replay
     p_aof2 = subprocess.Popen([
         server_binary(), "-p", str(aof_port), "--aof", aof_file, "--no-snapshot"
     ])

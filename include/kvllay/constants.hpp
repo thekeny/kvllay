@@ -21,7 +21,7 @@ inline constexpr const char* DEFAULT_HOST = "0.0.0.0";
 
 inline constexpr size_t CLIENT_BUFFER_SIZE = 65536;
 
-inline constexpr size_t DEFAULT_IO_THREADS = 0; // 0 = auto-detect CPU cores
+inline constexpr size_t DEFAULT_IO_THREADS = 0;
 inline constexpr int MAX_EVENTS_PER_LOOP = 256;
 inline constexpr int EPOLL_TIMEOUT_MS = 50;
 
@@ -151,4 +151,4 @@ inline bool glob_match(std::string_view pattern, std::string_view value) noexcep
 }
 }
 
-#endif // KVLLAY_CONSTANTS_HPP
+#endif

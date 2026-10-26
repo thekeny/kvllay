@@ -41,7 +41,6 @@
     #define MSG_NOSIGNAL 0
     #endif
 
-    // Fallback constants for epoll compatibility stubs on Windows
     #ifndef EPOLLIN
     #define EPOLLIN 0x001
     #endif
@@ -354,8 +353,8 @@ private:
         modify_epoll(fd, events);
     }
 #else
-    void modify_epoll(socket_t /*fd*/, uint32_t /*events*/) {}
-    void set_write_interest(socket_t /*fd*/, bool /*enable*/) {}
+    void modify_epoll(socket_t, uint32_t) {}
+    void set_write_interest(socket_t, bool) {}
 #endif
 
     void remove_connection(socket_t fd) {
@@ -421,8 +420,6 @@ private:
             return;
         }
 
-        // Authentication is checked before transaction handling. AUTH and HELLO
-        // must remain usable before MULTI, while all other commands are rejected.
         if (!password_.empty() && !conn.authenticated &&
             !is_command(command, "AUTH") && !is_command(command, "HELLO")) {
             Resp::append_error(out, "NOAUTH Authentication required.");
@@ -776,6 +773,6 @@ private:
     std::vector<std::unique_ptr<WorkerEventLoop>> workers_;
 };
 
-} // namespace kvllay
+}
 
-#endif // KVLLAY_EVENT_LOOP_HPP
+#endif

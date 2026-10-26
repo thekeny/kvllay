@@ -150,8 +150,6 @@ public:
             writer_thread_.join();
         }
 
-        // A rewrite uses this object and may replace file_handle_.  It must
-        // finish before the manager (and its FILE*) can be destroyed.
         {
             std::lock_guard<std::mutex> lock(rewrite_mutex_);
             if (rewrite_thread_.joinable()) {
@@ -282,8 +280,6 @@ public:
                 return false;
             }
 
-            // A completed rewrite remains joinable until it is collected.
-            // Reap it before starting the next rewrite.
             if (rewrite_thread_.joinable()) {
                 std::thread previous = std::move(rewrite_thread_);
                 previous.join();
@@ -312,8 +308,6 @@ private:
                 }
             }
 
-            // Write flushing_buffer_ and perform periodic fsync under file_mutex_ without
-            // holding buffer_mutex_. This ensures client mutating commands are never stalled by disk I/O!
             std::lock_guard<std::mutex> file_lock(file_mutex_);
             if (!flushing_buffer_.empty() && file_handle_) {
                 fwrite(flushing_buffer_.data(), 1, flushing_buffer_.size(), file_handle_);
@@ -352,9 +346,6 @@ private:
         }
     }
 
-    // Must be called while file_mutex_ is held. Keeping the FILE* lifetime
-    // and every stdio operation under file_mutex_ prevents rewrite from
-    // closing the stream while another thread is using it.
     void sync_file_locked() {
         if (!file_handle_) return;
 #ifdef _WIN32
@@ -635,11 +626,14 @@ private:
             }
             std::vector<std::string> popped;
             store.rpop(args[1], count, popped);
-        } else if (cmd == "HSET" && args.size() >= 4 && (args.size() - 2) % 2 == 0) {
+        } else if ((cmd == "HSET" || cmd == "HMSET") && args.size() >= 4 && (args.size() - 2) % 2 == 0) {
             std::vector<std::pair<std::string, std::string>> fields;
             for (size_t i = 2; i < args.size(); i += 2) fields.emplace_back(args[i], args[i + 1]);
             size_t added = 0;
             store.hset(args[1], fields, added);
+        } else if (cmd == "HINCRBY" && args.size() == 4) {
+            int64_t delta = 0, result = 0;
+            if (Store::parse_hash_integer(args[3], delta)) store.hincrby(args[1], args[2], delta, result);
         } else if (cmd == "HSETNX" && args.size() >= 4) {
             int inserted = 0;
             store.hsetnx(args[1], args[2], args[3], inserted);
@@ -689,9 +683,6 @@ private:
     std::mutex buffer_mutex_;
     std::condition_variable cv_;
 
-    // Protects the lifetime of the rewrite thread.  The operation still
-    // serializes FILE*/buffer access through buffer_mutex_, while stop() joins
-    // this thread before destroying the manager underneath it.
     std::mutex rewrite_mutex_;
 
     std::atomic<bool> running_;
@@ -703,4 +694,4 @@ private:
 
 }
 
-#endif // KVLLAY_AOF_HPP
+#endif

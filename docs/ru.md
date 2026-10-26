@@ -182,7 +182,26 @@ flowchart TD
 > 3. **Автоматическая очистка**: Когда список становится пустым в результате `LPOP` или `RPOP`, ключ и его метаданные автоматически удаляются из базы данных.
 > 4. **Строгая защита типов (`WRONGTYPE`)**: Попытка применить строковые команды (`GET`, `INCR`) к списку или команды списков к строке возвращает ошибку `WRONGTYPE Operation against a key holding the wrong kind of value`.
 
-### 3.6 Управление базой и диагностика
+### 3.6 Хэш-таблицы (Hashes)
+
+Хэши в `kvllay` представляют собой сопоставление между строковыми полями и строковыми значениями (`std::unordered_map<std::string, std::string>`).
+
+| Команда | Описание | Пример | Ответ |
+| :--- | :--- | :--- | :--- |
+| `HSET key field val [f v ...]` | Устанавливает значение одного или нескольких полей хэша | `HSET user:1 name "Alex" role "admin"` | `:<added_count>\r\n` |
+| `HSETNX key field value` | Устанавливает поле, только если оно еще не существует | `HSETNX user:1 name "Bob"` | `:1\r\n` (или `:0\r\n`) |
+| `HGET key field` | Возвращает значение указанного поля | `HGET user:1 name` | `"$4\r\nAlex\r\n"` |
+| `HGETALL key` | Возвращает все поля и значения хэша | `HGETALL user:1` | `*<count*2>\r\n...` |
+| `HVALS key` | Возвращает все значения в хэше | `HVALS user:1` | `*<count>\r\n...` |
+| `HDEL key field [field ...]` | Удаляет одно или несколько полей из хэша | `HDEL user:1 role` | `:<removed_count>\r\n` |
+| `HLEN key` | Возвращает количество полей в хэше | `HLEN user:1` | `:<count>\r\n` |
+| `HEXISTS key field` | Возвращает 1, если поле существует, иначе 0 | `HEXISTS user:1 name` | `:1\r\n` |
+| `HINCRBY key field increment` | Атомарно увеличивает 64-битное целое; сохраняет TTL и проверяет переполнение | `HINCRBY user:1 visits 1` | `:1\r\n` |
+| `HMGET key field [field ...]` | Возвращает значения в порядке запроса, null для отсутствующих полей | `HMGET user:1 name missing` | `*<count>\r\n...` |
+| `HMSET key field value [field value ...]` | Атомарно устанавливает несколько полей, сохраняя TTL | `HMSET user:1 name Alex role admin` | `+OK\r\n` |
+| `HKEYS key` | Возвращает имена всех полей без гарантии порядка | `HKEYS user:1` | `*<count>\r\n...` |
+
+### 3.7 Управление базой и диагностика
 
 | Команда | Описание | Пример | Ответ |
 | :--- | :--- | :--- | :--- |
