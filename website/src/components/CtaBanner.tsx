@@ -1,7 +1,6 @@
 import { IconStar, IconDownload, IconBook2 } from "@tabler/icons-react"
 import { useGithubStars, formatStars } from "@/lib/useGithubStars"
 import { links } from "@/config/links"
-import { paths } from "@/config/paths"
 import { images } from "@/config/images"
 import { Reveal } from "@/components/ui/Reveal"
 
