@@ -23,7 +23,6 @@ def test_transactions_and_pipelines(port=6389):
     assert send_recv(s, "DISCARD\r\n") == "-ERR DISCARD without MULTI\r\n"
     s.close()
 
-    # QUIT inside MULTI
     s_quit = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s_quit.connect(("127.0.0.1", port))
     res = send_recv(s_quit, "MULTI\r\nSET qk qv\r\nQUIT\r\n")

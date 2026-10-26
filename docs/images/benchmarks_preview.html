@@ -39,7 +39,6 @@
       gap: 36px;
     }
 
-    /* Карточка графика (без скруглений) */
     .chart-card {
       background: var(--color-card);
       border: 1px solid var(--color-border);
@@ -65,7 +64,6 @@
       text-align: center;
     }
 
-    /* Легенда */
     .chart-legend {
       display: flex;
       justify-content: center;
@@ -90,13 +88,11 @@
     .legend-kvllay { background-color: var(--color-kvllay); }
     .legend-redis { background-color: var(--color-redis); }
 
-    /* Обертка графика */
     .chart-container {
       display: flex;
       height: 290px;
     }
 
-    /* Вертикальная ось Y */
     .y-axis-area {
       display: flex;
       flex-direction: row;
@@ -125,7 +121,6 @@
       text-align: right;
     }
 
-    /* Зона отрисовки */
     .plot-area {
       flex: 1;
       position: relative;
@@ -133,7 +128,6 @@
       flex-direction: column;
     }
 
-    /* Сетка */
     .grid-layer {
       position: absolute;
       top: 0;
@@ -158,7 +152,6 @@
       background-color: transparent;
     }
 
-    /* Слой со столбцами */
     .bars-layer {
       position: relative;
       z-index: 2;
@@ -214,7 +207,6 @@
       background-color: var(--color-redis);
     }
 
-    /* Подписи категорий по оси X */
     .x-axis-labels {
       height: 40px;
       display: flex;
@@ -234,7 +226,6 @@
 </head>
 <body>
 
-  <!-- Chart 1: Throughput Single-Client -->
   <div class="chart-card" id="chart-single-client">
     <div class="chart-header">
       <h2 class="chart-title">Throughput: Single-Client (RPS, higher is better)</h2>
@@ -335,7 +326,6 @@
     </div>
   </div>
 
-  <!-- Chart 2: Throughput Multi-Threaded & Pipelined -->
   <div class="chart-card" id="chart-multithreaded">
     <div class="chart-header">
       <h2 class="chart-title">Throughput: Batch Pipelined & High-Concurrency (RPS, higher is better)</h2>
@@ -422,7 +412,6 @@
     </div>
   </div>
 
-  <!-- Chart 3: Latency -->
   <div class="chart-card" id="chart-latency">
     <div class="chart-header">
       <h2 class="chart-title">Response Latency: Lower is Better (μs)</h2>
@@ -509,7 +498,6 @@
     </div>
   </div>
 
-  <!-- Chart 4: RAM Usage -->
   <div class="chart-card" id="chart-ram">
     <div class="chart-header">
       <h2 class="chart-title">RAM Usage: Idle & Populated (MB, lower is better)</h2>
@@ -584,7 +572,6 @@
     </div>
   </div>
 
-  <!-- Chart 5: Docker Image Size -->
   <div class="chart-card" id="chart-docker">
     <div class="chart-header">
       <h2 class="chart-title">Docker Image Size (MB, lower is better)</h2>

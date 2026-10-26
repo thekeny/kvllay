@@ -74,7 +74,6 @@ inline size_t get_rss_bytes() {
     }
     return 0;
 #else
-    // On Linux, read /proc/self/statm for resident pages
     FILE* fp = std::fopen("/proc/self/statm", "r");
     if (fp) {
         long total_pages = 0;
@@ -90,7 +89,6 @@ inline size_t get_rss_bytes() {
         }
     }
 
-    // Fallback: getrusage
     struct rusage usage;
     if (getrusage(RUSAGE_SELF, &usage) == 0) {
 #if defined(__APPLE__)
@@ -125,13 +123,10 @@ inline size_t get_peak_rss_bytes() {
 
 inline void purge_freed_memory() {
 #if defined(USE_JEMALLOC)
-    // jemalloc purge dirty pages across all arenas
     mallctl("arena.4096.purge", nullptr, nullptr, nullptr, 0);
 #elif defined(USE_MIMALLOC)
-    // mimalloc collect and return unused pages to OS
     mi_collect(true);
 #elif defined(__GLIBC__) && !defined(_WIN32)
-    // glibc malloc_trim
     malloc_trim(0);
 #endif
 }
@@ -143,7 +138,7 @@ inline double get_fragmentation_ratio(size_t used_memory_bytes, size_t rss_bytes
     return static_cast<double>(rss_bytes) / static_cast<double>(used_memory_bytes);
 }
 
-} // namespace allocator
-} // namespace kvllay
+}
+}
 
-#endif // KVLLAY_ALLOCATOR_HPP
+#endif

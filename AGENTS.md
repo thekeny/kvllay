@@ -126,6 +126,11 @@
   - `HVALS key`: Returns all values in the hash.
   - `HDEL key field [field ...]`: Removes field(s) from hash, returns count of removed fields.
   - `HLEN key`: Returns number of fields in the hash.
+  - `HEXISTS key field`: Returns 1 if the hash field exists, otherwise 0.
+  - `HINCRBY key field increment`: Atomically increments a signed 64-bit integer field, preserving TTL; rejects invalid integers and overflow.
+  - `HMGET key field [field ...]`: Returns values in requested order, including nulls for missing fields.
+  - `HMSET key field value [field value ...]`: Sets multiple hash fields atomically, preserves TTL, and returns `+OK`.
+  - `HKEYS key`: Returns all field names, or an empty array for a missing key.
   - `SELECT index`: Selects logical database (supports default DB 0, returns `-ERR DB index is out of range` for out-of-range indexes).
   - `CONFIG GET parameter`: Retrieves configuration parameter (`maxmemory`, `maxmemory-policy`, or `*`).
   - `CONFIG SET parameter value`: Dynamically sets configuration (`maxmemory`, `maxmemory-policy`).

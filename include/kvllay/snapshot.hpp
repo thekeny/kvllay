@@ -112,9 +112,6 @@ public:
 
     bool save_sync(const Store& store, const std::string& filepath = "") {
         std::string target = filepath.empty() ? snapshot_path_ : filepath;
-        // Serialize the complete operation with lifecycle changes.  In
-        // particular, stop() must not return while this call still uses
-        // SnapshotManager's state.
         std::lock_guard<std::mutex> lock(save_thread_mutex_);
 
         bool expected = false;
@@ -129,9 +126,6 @@ public:
 
     bool save_async(const Store& store, const std::string& filepath = "") {
         std::string target = filepath.empty() ? snapshot_path_ : filepath;
-        // Keep the lifecycle lock while taking the point-in-time copy and
-        // installing the worker.  This prevents stop() from destroying the
-        // manager between those two operations.
         std::lock_guard<std::mutex> lock(save_thread_mutex_);
 
         bool expected = false;
@@ -139,9 +133,6 @@ public:
             return false;
         }
 
-        // A completed std::thread remains joinable until it is collected.
-        // Reap it before reusing the member, otherwise assigning a new
-        // thread to save_thread_ would call std::terminate().
         std::thread previous;
         if (save_shutdown_) {
             saving_in_progress_.store(false);
@@ -159,9 +150,6 @@ public:
             saving_in_progress_.store(false);
         });
 
-        // The previous save has already cleared saving_in_progress_, so it
-        // cannot still be writing.  Join it after installing the new worker;
-        // the local thread handle keeps ownership during this transition.
         if (previous.joinable()) {
             previous.join();
         }
@@ -425,9 +413,6 @@ public:
     }
 
     void stop_auto_save() {
-        // Keep the thread lifecycle lock until join completes.  This also
-        // prevents a concurrent start_auto_save() from reviving a worker
-        // before the old worker has exited.
         std::lock_guard<std::mutex> thread_lock(auto_save_thread_mutex_);
         auto_save_running_.store(false);
         auto_save_cv_.notify_all();
@@ -436,9 +421,6 @@ public:
         }
     }
 
-    // Stops all background snapshot activity.  The save thread is joined even
-    // when it has already finished, because a finished std::thread is still
-    // joinable and must be collected before this object is destroyed.
     void stop() {
         stop_auto_save();
 
@@ -625,4 +607,4 @@ private:
 
 }
 
-#endif // KVLLAY_SNAPSHOT_HPP
+#endif

@@ -108,8 +108,6 @@ public:
             return;
         }
 
-        // HELLO is allowed before authentication because it can carry the
-        // AUTH subcommand itself (HELLO 3 AUTH default password).
         if (iequals(cmd, "HELLO")) {
             handle_hello_sv(args, authenticated, server_password, client, out);
             return;
@@ -454,14 +452,67 @@ private:
 
         if (iequals(cmd, "HSET") || iequals(cmd, "HSETNX") || iequals(cmd, "HGET") ||
             iequals(cmd, "HGETALL") || iequals(cmd, "HDEL") || iequals(cmd, "HLEN") ||
-            iequals(cmd, "HVALS")) {
-            if (iequals(cmd, "HVALS")) {
+            iequals(cmd, "HVALS") || iequals(cmd, "HKEYS") || iequals(cmd, "HEXISTS") ||
+            iequals(cmd, "HMGET") || iequals(cmd, "HMSET") || iequals(cmd, "HINCRBY")) {
+            if (iequals(cmd, "HINCRBY")) {
+                if (args.size() != 4) {
+                    Resp::append_error(out, "wrong number of arguments for 'hincrby' command");
+                    return true;
+                }
+                int64_t delta = 0, result = 0;
+                if (!Store::parse_hash_integer(args[3], delta)) {
+                    Resp::append_error(out, "value is not an integer or out of range");
+                    return true;
+                }
+                auto status = store_.hincrby(std::string(args[1]), std::string(args[2]), delta, result);
+                if (status == Store::IncrStatus::WrongType) append_wrongtype(out);
+                else if (status == Store::IncrStatus::NotAnInteger)
+                    Resp::append_error(out, "hash value is not an integer");
+                else if (status == Store::IncrStatus::Overflow)
+                    Resp::append_error(out, "increment or decrement would overflow");
+                else Resp::append_integer(out, result);
+                is_mutating = status == Store::IncrStatus::Success;
+                return true;
+            }
+            if (iequals(cmd, "HEXISTS")) {
+                if (args.size() != 3) {
+                    Resp::append_error(out, "wrong number of arguments for 'hexists' command");
+                    return true;
+                }
+                bool exists = false;
+                auto status = store_.hexists(std::string(args[1]), std::string(args[2]), exists);
+                if (status == Store::CollectionStatus::WrongType) append_wrongtype(out);
+                else Resp::append_integer(out, exists ? 1 : 0);
+                return true;
+            }
+            if (iequals(cmd, "HMGET")) {
+                if (args.size() < 3) {
+                    Resp::append_error(out, "wrong number of arguments for 'hmget' command");
+                    return true;
+                }
+                std::vector<std::string> fields(args.begin() + 2, args.end());
+                std::vector<std::optional<std::string>> values;
+                auto status = store_.hmget(std::string(args[1]), fields, values);
+                if (status == Store::CollectionStatus::WrongType) append_wrongtype(out);
+                else {
+                    Resp::append_array_header(out, values.size());
+                    for (const auto& value : values) {
+                        if (value) Resp::append_bulk_string(out, *value);
+                        else Resp::append_null_bulk_string(out, client.protocol);
+                    }
+                }
+                return true;
+            }
+            if (iequals(cmd, "HVALS") || iequals(cmd, "HKEYS")) {
                 if (args.size() != 2) {
-                    Resp::append_error(out, "wrong number of arguments for 'hvals' command");
+                    Resp::append_error(out, iequals(cmd, "HKEYS")
+                        ? "wrong number of arguments for 'hkeys' command"
+                        : "wrong number of arguments for 'hvals' command");
                     return true;
                 }
                 std::vector<std::string> values;
-                auto status = store_.hvals(std::string(args[1]), values);
+                auto status = iequals(cmd, "HKEYS") ? store_.hkeys(std::string(args[1]), values)
+                                                     : store_.hvals(std::string(args[1]), values);
                 if (status == Store::CollectionStatus::WrongType) append_wrongtype(out);
                 else {
                     Resp::append_array_header(out, values.size());
@@ -473,9 +524,11 @@ private:
                 Resp::append_error(out, "wrong number of arguments");
                 return true;
             }
-            if (iequals(cmd, "HSET")) {
+            if (iequals(cmd, "HSET") || iequals(cmd, "HMSET")) {
                 if (args.size() < 4 || ((args.size() - 2) % 2) != 0) {
-                    Resp::append_error(out, "wrong number of arguments for 'hset' command");
+                    Resp::append_error(out, iequals(cmd, "HMSET")
+                        ? "wrong number of arguments for 'hmset' command"
+                        : "wrong number of arguments for 'hset' command");
                     return true;
                 }
                 std::vector<std::pair<std::string, std::string>> fields;
@@ -483,6 +536,7 @@ private:
                 size_t added = 0;
                 auto status = store_.hset(std::string(args[1]), fields, added);
                 if (status == Store::CollectionStatus::WrongType) append_wrongtype(out);
+                else if (iequals(cmd, "HMSET")) Resp::append_ok(out);
                 else Resp::append_integer(out, static_cast<long long>(added));
                 is_mutating = status == Store::CollectionStatus::Success;
                 return true;
@@ -915,8 +969,6 @@ private:
     }
 
     void append_hello_info_resp2(std::string& out, uint64_t client_id) {
-        // Redis represents the HELLO map as a flat array when RESP2 is
-        // selected. Keep the fields stable so clients can inspect them.
         Resp::append_array_header(out, 14);
         Resp::append_bulk_string(out, "server");
         Resp::append_bulk_string(out, constants::SERVER_NAME);
@@ -935,7 +987,6 @@ private:
     }
 
     void append_hello_info_resp3(std::string& out, uint64_t client_id) {
-        // RESP3 map: server, version, proto, id, mode, role and modules.
         out += "%7\r\n";
         Resp::append_bulk_string(out, "server");
         Resp::append_bulk_string(out, constants::SERVER_NAME);
@@ -1792,4 +1843,4 @@ private:
 
 }
 
-#endif // KVLLAY_COMMANDS_HPP
+#endif

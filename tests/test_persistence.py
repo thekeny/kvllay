@@ -12,24 +12,20 @@ def test_persistence(port=6389):
     s.connect(("127.0.0.1", port))
     send_recv(s, "FLUSHDB\r\n")
 
-    # 1. Test SAVE command
     res = send_recv(s, "SAVE\r\n")
     assert res == "+OK\r\n", f"Expected +OK from SAVE, got {repr(res)}"
     print("[PASS] SAVE command returns +OK")
 
-    # 2. Test BGSAVE command
     res = send_recv(s, "BGSAVE\r\n")
     assert res == "+Background saving started\r\n" or "already in progress" in res, f"Expected background save response, got {repr(res)}"
     print("[PASS] BGSAVE command returns '+Background saving started'")
 
-    # 3. Test LASTSAVE command
     res = send_recv(s, "LASTSAVE\r\n")
     assert res.startswith(":"), f"Expected integer from LASTSAVE, got {repr(res)}"
     save_ts = int(res.strip()[1:])
     assert save_ts > 0, f"Expected valid timestamp, got {save_ts}"
     print(f"[PASS] LASTSAVE returned timestamp {save_ts}")
 
-    # 4. Test INFO contains persistence metrics
     info_res = send_recv(s, "INFO\r\n")
     assert "# Persistence" in info_res, f"INFO missing # Persistence section: {info_res}"
     assert "rdb_last_save_time:" in info_res, "INFO missing rdb_last_save_time"
@@ -39,7 +35,6 @@ def test_persistence(port=6389):
 
     s.close()
 
-    # 5. Dedicated Snapshot lifecycle test across process restarts
     print("Testing Snapshot persistence lifecycle (write -> save -> kill -> restart -> verify)...")
     snap_port = port + 3
     snap_file = "test_snapshot_lifecycle.kvl"
@@ -64,7 +59,6 @@ def test_persistence(port=6389):
     assert os.path.exists(snap_file), "Snapshot file was not created on disk"
     assert os.path.getsize(snap_file) > 28, "Snapshot file is too small"
 
-    # Restart server and verify keys are restored
     p2 = subprocess.Popen([server_binary(), "-p", str(snap_port), "--snapshot", snap_file, "--no-aof"])
     wait_for_server(snap_port)
     try:
@@ -85,7 +79,6 @@ def test_persistence(port=6389):
         if os.path.exists(snap_file):
             os.remove(snap_file)
 
-    # 6. Dedicated AOF lifecycle test across process restarts
     print("Testing AOF persistence lifecycle (mutations -> restart -> verify)...")
     aof_port = port + 4
     aof_file = "test_aof_lifecycle.aof"
@@ -120,11 +113,8 @@ def test_persistence(port=6389):
     with open(aof_file, "rb") as aof:
         assert b"PEXPIREAT" in aof.read(), "EXPIRE must be serialized as absolute PEXPIREAT in AOF"
 
-    # Wait until the original absolute deadline has passed. A relative EXPIRE
-    # replay would incorrectly make the key live again after the restart.
     time.sleep(1.2)
 
-    # Restart server and verify AOF replay
     p_aof2 = subprocess.Popen([server_binary(), "-p", str(aof_port), "--aof", aof_file, "--no-snapshot"])
     wait_for_server(aof_port)
     try:
@@ -145,15 +135,11 @@ def test_persistence(port=6389):
         if os.path.exists(aof_file):
             os.remove(aof_file)
 
-    # 7. Truncated AOF Crash Recovery
     print("Testing truncated AOF crash recovery...")
     trunc_aof = "test_trunc_crash.aof"
     with open(trunc_aof, "wb") as f:
-        # Valid command 1
         f.write(b"*3\r\n$3\r\nSET\r\n$7\r\nvalid_k\r\n$7\r\nvalid_v\r\n")
-        # Valid command 2
         f.write(b"*2\r\n$4\r\nINCR\r\n$9\r\nsaved_num\r\n")
-        # Incomplete / cut-off command at crash
         f.write(b"*3\r\n$3\r\nSET\r\n$11\r\nincomplete_\r\n$20\r\ntruncated_payload_mi")
 
     trunc_port = port + 7
@@ -173,7 +159,6 @@ def test_persistence(port=6389):
         if os.path.exists(trunc_aof):
             os.remove(trunc_aof)
 
-    # 8. Snapshot CRC32 corruption detection
     print("Testing CRC32 snapshot corruption detection...")
     corrupt_file = "corrupt_test.kvl"
     with open(corrupt_file, "wb") as f:

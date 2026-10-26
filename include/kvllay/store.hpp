@@ -466,8 +466,6 @@ public:
             std::unique_lock<std::shared_mutex> lock(shard.mutex);
             auto it = shard.data.find(k);
 
-            // Expired entries must behave as absent for NX/XX and should not
-            // retain their memory until the active eviction pass runs.
             if (it != shard.data.end() && it->second.expire_at != 0 && it->second.expire_at <= now_ms) {
                 sub_memory(estimate_entry_memory(k, it->second));
                 shard.data.erase(it);
@@ -861,12 +859,13 @@ public:
             shard.keys_with_ttl.erase(key);
             it = shard.data.end();
         }
-        if (it == shard.data.end()) {
+        const bool created = it == shard.data.end();
+        if (created) {
             it = shard.data.emplace(key, Entry{Hash{}, 0, current_lru_clock()}).first;
         } else if (!it->second.is_hash()) {
             return CollectionStatus::WrongType;
         }
-        size_t old_mem = estimate_entry_memory(key, it->second);
+        size_t old_mem = created ? 0 : estimate_entry_memory(key, it->second);
         auto& hash = it->second.as_hash();
         for (const auto& [field, value] : fields) {
             if (hash.find(field) == hash.end()) ++added;
@@ -925,6 +924,91 @@ public:
         if (field_it == it->second.as_hash().end()) return CollectionStatus::NotFound;
         value = field_it->second;
         return CollectionStatus::Success;
+    }
+
+    CollectionStatus hexists(const std::string& key, const std::string& field, bool& exists) {
+        exists = false;
+        auto& shard = shards_[shard_index(key)];
+        std::shared_lock<std::shared_mutex> lock(shard.mutex);
+        auto it = shard.data.find(key);
+        if (it == shard.data.end() || (it->second.expire_at != 0 && it->second.expire_at <= current_time_ms()))
+            return CollectionStatus::NotFound;
+        if (!it->second.is_hash()) return CollectionStatus::WrongType;
+        it->second.touch(current_lru_clock());
+        exists = it->second.as_hash().find(field) != it->second.as_hash().end();
+        return CollectionStatus::Success;
+    }
+
+    CollectionStatus hmget(const std::string& key, const std::vector<std::string>& fields,
+                           std::vector<std::optional<std::string>>& values) {
+        values.assign(fields.size(), std::nullopt);
+        auto& shard = shards_[shard_index(key)];
+        std::shared_lock<std::shared_mutex> lock(shard.mutex);
+        auto it = shard.data.find(key);
+        if (it == shard.data.end() || (it->second.expire_at != 0 && it->second.expire_at <= current_time_ms()))
+            return CollectionStatus::NotFound;
+        if (!it->second.is_hash()) return CollectionStatus::WrongType;
+        it->second.touch(current_lru_clock());
+        const auto& hash = it->second.as_hash();
+        for (size_t i = 0; i < fields.size(); ++i) {
+            auto field = hash.find(fields[i]);
+            if (field != hash.end()) values[i] = field->second;
+        }
+        return CollectionStatus::Success;
+    }
+
+    CollectionStatus hkeys(const std::string& key, std::vector<std::string>& fields) {
+        fields.clear();
+        auto& shard = shards_[shard_index(key)];
+        std::shared_lock<std::shared_mutex> lock(shard.mutex);
+        auto it = shard.data.find(key);
+        if (it == shard.data.end() || (it->second.expire_at != 0 && it->second.expire_at <= current_time_ms()))
+            return CollectionStatus::NotFound;
+        if (!it->second.is_hash()) return CollectionStatus::WrongType;
+        it->second.touch(current_lru_clock());
+        fields.reserve(it->second.as_hash().size());
+        for (const auto& field : it->second.as_hash()) fields.push_back(field.first);
+        return CollectionStatus::Success;
+    }
+
+    static bool parse_hash_integer(std::string_view value, int64_t& result) {
+        if (value.empty()) return false;
+        if (value == "0") { result = 0; return true; }
+        size_t first = value[0] == '-' ? 1 : 0;
+        if (first == value.size() || value[first] < '1' || value[first] > '9') return false;
+        auto [ptr, ec] = std::from_chars(value.data(), value.data() + value.size(), result);
+        return ec == std::errc() && ptr == value.data() + value.size();
+    }
+
+    IncrStatus hincrby(const std::string& key, const std::string& field,
+                      int64_t delta, int64_t& result) {
+        auto& shard = shards_[shard_index(key)];
+        std::unique_lock<std::shared_mutex> lock(shard.mutex);
+        auto it = shard.data.find(key);
+        if (it != shard.data.end() && it->second.expire_at != 0 && it->second.expire_at <= current_time_ms()) {
+            sub_memory(estimate_entry_memory(key, it->second));
+            shard.data.erase(it);
+            shard.keys_with_ttl.erase(key);
+            it = shard.data.end();
+        }
+        const bool created = it == shard.data.end();
+        int64_t current = 0;
+        if (!created) {
+            if (!it->second.is_hash()) return IncrStatus::WrongType;
+            auto value = it->second.as_hash().find(field);
+            if (value != it->second.as_hash().end() && !parse_hash_integer(value->second, current))
+                return IncrStatus::NotAnInteger;
+        }
+        if (add_overflow(current, delta, result)) return IncrStatus::Overflow;
+        size_t old_mem = created ? 0 : estimate_entry_memory(key, it->second);
+        if (created) it = shard.data.emplace(key, Entry{Hash{}, 0, current_lru_clock()}).first;
+        it->second.as_hash()[field] = std::to_string(result);
+        it->second.touch(current_lru_clock());
+        size_t new_mem = estimate_entry_memory(key, it->second);
+        if (new_mem > old_mem) add_memory(new_mem - old_mem);
+        else if (old_mem > new_mem) sub_memory(old_mem - new_mem);
+        dirty_++;
+        return IncrStatus::Success;
     }
 
     CollectionStatus hgetall(const std::string& key, std::vector<std::pair<std::string, std::string>>& values) {
@@ -2083,7 +2167,6 @@ public:
             return result;
         }
 
-        // Fast path for simple prefix "foo*"
         if (pattern.back() == '*' && pattern.front() != '*' && pattern.find_first_of("*?[") == pattern.size() - 1) {
             std::string prefix = pattern.substr(0, pattern.size() - 1);
             for (const auto& shard : shards_) {
@@ -2096,7 +2179,6 @@ public:
             return result;
         }
 
-        // Fast path for simple suffix "*foo"
         if (pattern.front() == '*' && pattern.back() != '*' && pattern.rfind('*') == 0 && pattern.find_first_of("?[") == std::string::npos) {
             std::string suffix = pattern.substr(1);
             for (const auto& shard : shards_) {
@@ -2111,7 +2193,6 @@ public:
             return result;
         }
 
-        // Fast path for simple substring "*foo*"
         if (pattern.front() == '*' && pattern.back() == '*' && pattern.size() > 2 && pattern.find_first_of("*?[", 1) == pattern.size() - 1) {
             std::string substr = pattern.substr(1, pattern.size() - 2);
             for (const auto& shard : shards_) {
@@ -2124,7 +2205,6 @@ public:
             return result;
         }
 
-        // General glob matching for patterns like "user:*:profile" or "[a-z]*"
         for (const auto& shard : shards_) {
             std::shared_lock<std::shared_mutex> lock(shard.mutex);
             for (const auto& [k, v] : shard.data) {
@@ -2640,4 +2720,4 @@ private:
 
 }
 
-#endif // KVLLAY_STORE_HPP
+#endif

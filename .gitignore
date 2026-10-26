@@ -5,7 +5,7 @@ __pycache__/
 *.pyc
 .venv/
 
-# Database persistence files (snapshots, AOF, temp swap files)
+# Database persistence files
 *.kvl
 *.aof
 *.tmp.*

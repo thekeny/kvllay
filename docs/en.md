@@ -195,6 +195,11 @@ Hashes in `kvllay` represent maps between string fields and string values (`std:
 | `HVALS key` | Returns all values in the hash | `HVALS user:1` | `*<count>\r\n...` |
 | `HDEL key field [field ...]` | Removes field(s) from the hash | `HDEL user:1 role` | `:<removed_count>\r\n` |
 | `HLEN key` | Returns number of fields in the hash | `HLEN user:1` | `:<count>\r\n` |
+| `HEXISTS key field` | Returns 1 if the field exists, otherwise 0 | `HEXISTS user:1 name` | `:1\r\n` |
+| `HINCRBY key field increment` | Atomically increments a signed 64-bit integer; preserves TTL and rejects overflow | `HINCRBY user:1 visits 1` | `:1\r\n` |
+| `HMGET key field [field ...]` | Returns values in requested order, with nulls for missing fields | `HMGET user:1 name missing` | `*<count>\r\n...` |
+| `HMSET key field value [field value ...]` | Sets multiple fields atomically, preserving TTL | `HMSET user:1 name Alex role admin` | `+OK\r\n` |
+| `HKEYS key` | Returns all field names (unordered) | `HKEYS user:1` | `*<count>\r\n...` |
 
 ### 3.7 Database Administration & Diagnostics
 

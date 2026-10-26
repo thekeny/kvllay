@@ -195,6 +195,11 @@ flowchart TD
 | `HVALS key` | Возвращает все значения в хэше | `HVALS user:1` | `*<count>\r\n...` |
 | `HDEL key field [field ...]` | Удаляет одно или несколько полей из хэша | `HDEL user:1 role` | `:<removed_count>\r\n` |
 | `HLEN key` | Возвращает количество полей в хэше | `HLEN user:1` | `:<count>\r\n` |
+| `HEXISTS key field` | Возвращает 1, если поле существует, иначе 0 | `HEXISTS user:1 name` | `:1\r\n` |
+| `HINCRBY key field increment` | Атомарно увеличивает 64-битное целое; сохраняет TTL и проверяет переполнение | `HINCRBY user:1 visits 1` | `:1\r\n` |
+| `HMGET key field [field ...]` | Возвращает значения в порядке запроса, null для отсутствующих полей | `HMGET user:1 name missing` | `*<count>\r\n...` |
+| `HMSET key field value [field value ...]` | Атомарно устанавливает несколько полей, сохраняя TTL | `HMSET user:1 name Alex role admin` | `+OK\r\n` |
+| `HKEYS key` | Возвращает имена всех полей без гарантии порядка | `HKEYS user:1` | `*<count>\r\n...` |
 
 ### 3.7 Управление базой и диагностика
 

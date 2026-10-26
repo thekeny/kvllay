@@ -1,5 +1,3 @@
-# Exclude website frontend from repository language statistics
 website/** linguist-detectable=false
 
-# Keep docs HTML detectable in language statistics
 docs/images/*.html linguist-detectable=true
