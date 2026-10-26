@@ -24,69 +24,64 @@ cd kvllay && make compile
 ./build/kvllay -p 6379`
 
   return (
-    <section id={paths.sections.quickstart} className="w-full flex flex-col items-center py-10 sm:py-16 px-4 sm:px-6 lg:px-10 max-w-[1240px] mx-auto scroll-mt-20">
+    <section id={paths.sections.quickstart} className="w-full flex flex-col items-center py-8 sm:py-12 px-4 sm:px-6 lg:px-10 max-w-[1240px] mx-auto scroll-mt-20">
       <Reveal direction="up" className="flex flex-col items-center text-center gap-2.5 sm:gap-3 mb-8 sm:mb-12">
-        <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[#00D2FF]/10 border border-[#00D2FF]/30">
-          <span className="text-[11px] font-mono font-bold text-[#00D2FF] tracking-wider uppercase">
-            DEPLOYMENT OPTIONS
-          </span>
-        </div>
-        <h2 className="text-2xl sm:text-3xl lg:text-[38px] font-bold text-[#F0F6FC] tracking-tight">
+        <h2 className="text-2xl sm:text-3xl lg:text-[38px] font-bold text-text-primary tracking-tight">
           Ready in Seconds. Pick Your Workflow.
         </h2>
-        <p className="text-sm sm:text-base text-[#8B9BB4] max-w-[780px] leading-[1.6]">
+        <p className="text-base text-text-secondary max-w-[65ch] leading-[1.6]">
           From zero-config Docker scratch images to native standalone executables and single-command local compilation.
         </p>
       </Reveal>
 
-      <div className="w-full grid grid-cols-1 md:grid-cols-3 gap-4 sm:gap-5 items-stretch">
-        <Reveal direction="up" delay={0} className="h-full">
-          <div className="h-full bg-[#0E131F] border border-[#00D2FF] rounded-xl p-4 sm:p-6 flex flex-col justify-between shadow-[0_0_30px_rgba(0,210,255,0.08)]">
-          <div className="flex flex-col gap-3 sm:gap-3.5 mb-4 sm:mb-5">
-            <div className="flex items-center justify-between">
-              <div className="w-8.5 sm:w-9 h-8.5 sm:h-9 rounded-lg bg-[#00D2FF]/15 flex items-center justify-center">
-                <IconTerminal2 className="size-4.5 sm:size-5 text-[#00D2FF]" />
+      <div className="w-full grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-5 items-stretch">
+        <Reveal direction="up" delay={0} className="h-full min-w-0">
+          <div className="h-full min-w-0 bg-surface-card rounded-xl p-5 sm:p-6 flex flex-col justify-between">
+            <div className="flex flex-col gap-3 sm:gap-3.5 mb-4 sm:mb-5">
+              <div className="flex items-center justify-between">
+                <div className="w-8.5 sm:w-9 h-8.5 sm:h-9 rounded-lg bg-accent-cyan/15 flex items-center justify-center">
+                  <IconTerminal2 className="size-4.5 sm:size-5 text-accent-cyan" />
+                </div>
+                <span className="px-2.5 py-1 rounded-md bg-accent-cyan text-primary-foreground text-[13px] tabular-nums font-bold">
+                  Recommended
+                </span>
               </div>
-              <span className="px-2.5 py-1 rounded-md bg-[#00D2FF] text-[#08090E] text-[10px] font-mono font-bold tracking-wider uppercase">
-                RECOMMENDED
-              </span>
+              <h3 className="text-base sm:text-lg font-bold text-text-primary">Docker Container</h3>
+              <p className="text-base text-text-secondary leading-[1.55]">
+                Ultra-lean 1.6 MB scratch image. Starts up instantly with zero host dependencies.
+              </p>
             </div>
-            <h3 className="text-base sm:text-lg font-bold text-[#F0F6FC]">Docker Container</h3>
-            <p className="text-[12.5px] sm:text-[13px] text-[#8B9BB4] leading-[1.55]">
-              Ultra-lean 1.6 MB scratch image. Starts up instantly with zero host dependencies.
-            </p>
-          </div>
 
-          <div className="relative bg-[#0B0E17] border border-[#1B2436] rounded-lg p-3 sm:p-3.5 font-mono text-xs text-[#F0F6FC] flex flex-col gap-1.5 group">
-            <div className="text-[#F0F6FC] whitespace-pre-wrap font-medium leading-relaxed pr-6">
-              docker run -d --name kvllay \<br />
-              <span className="text-[#00D2FF]">  -p 6379:6379 kenyka/kvllay:latest</span>
+            <div className="relative bg-surface-subtle min-w-0 rounded-lg p-3 sm:p-3.5 font-mono text-[13px] text-text-primary flex flex-col gap-1.5 group overflow-x-auto">
+              <code className="block text-text-primary whitespace-pre-wrap font-medium leading-relaxed pr-10">
+                docker run -d --name kvllay \<br />
+                <span className="text-accent-cyan">  -p 6379:6379 kenyka/kvllay:latest</span>
+              </code>
+              <button
+                type="button"
+                onClick={() => handleCopy(dockerCode, 1)}
+                className="absolute top-1 right-1 p-1.5 text-text-secondary hover:text-accent-cyan transition-colors focus:outline-none"
+                title="Copy code"
+              >
+                {copiedCard === 1 ? <IconCheck className="size-4 text-accent-cyan" /> : <IconCopy className="size-4" />}
+              </button>
             </div>
-            <button
-              type="button"
-              onClick={() => handleCopy(dockerCode, 1)}
-              className="absolute top-2.5 right-2.5 p-1.5 text-[#546682] hover:text-[#00D2FF] transition-colors focus:outline-none"
-              title="Copy code"
-            >
-              {copiedCard === 1 ? <IconCheck className="size-4 text-[#00D2FF]" /> : <IconCopy className="size-4" />}
-            </button>
-          </div>
         </div>
         </Reveal>
 
-        <Reveal direction="up" delay={100} className="h-full">
-          <div className="h-full bg-[#0E131F] border border-[#1B2436] hover:border-[#1E3B5C] rounded-xl p-4 sm:p-6 flex flex-col justify-between transition-colors shadow-sm">
+        <Reveal direction="up" delay={100} className="h-full min-w-0">
+          <div className="h-full min-w-0 bg-surface-card rounded-xl p-5 sm:p-6 flex flex-col justify-between transition-colors">
             <div className="flex flex-col gap-3 sm:gap-3.5 mb-4 sm:mb-5">
               <div className="flex items-center justify-between">
-                <div className="w-8.5 sm:w-9 h-8.5 sm:h-9 rounded-lg bg-[#0A0E17] border border-[#1B2436] flex items-center justify-center">
-                  <IconDownload className="size-4.5 sm:size-5 text-[#F0F6FC]" />
+                <div className="w-8.5 sm:w-9 h-8.5 sm:h-9 rounded-lg bg-surface-subtle flex items-center justify-center">
+                  <IconDownload className="size-4.5 sm:size-5 text-text-primary" />
                 </div>
-                <span className="px-2 py-0.5 rounded-md bg-[#0A0E17] text-[#546682] text-[10px] font-mono font-medium tracking-wider uppercase">
-                  PORTABLE
+                <span className="px-2 py-0.5 rounded-md bg-surface-subtle text-text-secondary text-[13px] tabular-nums font-medium">
+                  Portable
                 </span>
               </div>
-              <h3 className="text-base sm:text-lg font-bold text-[#F0F6FC]">Standalone Binaries</h3>
-              <p className="text-[12.5px] sm:text-[13px] text-[#8B9BB4] leading-[1.55]">
+              <h3 className="text-base sm:text-lg font-bold text-text-primary">Standalone Binaries</h3>
+              <p className="text-base text-text-secondary leading-[1.55]">
                 Pre-compiled single executables for Linux x86_64 and Windows x86_64 with zero shared libraries.
               </p>
             </div>
@@ -96,56 +91,56 @@ cd kvllay && make compile
                 href={links.releases}
                 target="_blank"
                 rel="noreferrer"
-                className="w-full flex items-center justify-center gap-2 py-2 sm:py-2.5 px-3.5 sm:px-4 bg-[#00D2FF] hover:bg-[#00b8e6] text-[#08090E] rounded-lg text-[12.5px] sm:text-[13px] font-bold transition-all shadow-[0_0_20px_rgba(0,210,255,0.2)] hover:shadow-[0_0_25px_rgba(0,210,255,0.35)]"
+                className="w-full flex items-center justify-center gap-2 py-2 sm:py-2.5 px-3.5 sm:px-4 bg-accent-cyan hover:bg-[#00b8e6] text-primary-foreground rounded-lg text-[13px] font-bold transition-colors"
               >
                 <IconDownload className="size-4 stroke-[2.5]" strokeWidth={2.5} />
                 <span>Download Binaries (x86_64)</span>
               </a>
 
-              <div className="relative bg-[#0B0E17] border border-[#1B2436] rounded-lg p-2.5 sm:p-3 font-mono text-xs text-[#F0F6FC] flex flex-col gap-1 group">
-                <div className="text-[#F0F6FC]">./kvllay-linux-x86_64 -p 6379</div>
-                <div className="text-[#F0F6FC]">.\kvllay-windows-x86_64.exe</div>
+              <div className="relative bg-surface-subtle min-w-0 rounded-lg p-2.5 sm:p-3 font-mono text-[13px] text-text-primary flex flex-col gap-1 group overflow-x-auto">
+                <code className="block whitespace-pre text-text-primary pr-10">./kvllay-linux-x86_64 -p 6379</code>
+                <code className="block whitespace-pre text-text-primary pr-10">.\kvllay-windows-x86_64.exe</code>
                 <button
                   type="button"
                   onClick={() => handleCopy(binaryCode, 2)}
-                  className="absolute top-2.5 right-2.5 p-1.5 text-[#546682] hover:text-[#00D2FF] transition-colors focus:outline-none"
+                  className="absolute top-1 right-1 p-1.5 text-text-secondary hover:text-accent-cyan transition-colors focus:outline-none"
                   title="Copy commands"
                 >
-                  {copiedCard === 2 ? <IconCheck className="size-4 text-[#00D2FF]" /> : <IconCopy className="size-4" />}
+                  {copiedCard === 2 ? <IconCheck className="size-4 text-accent-cyan" /> : <IconCopy className="size-4" />}
                 </button>
               </div>
             </div>
           </div>
         </Reveal>
 
-        <Reveal direction="up" delay={200} className="h-full">
-          <div className="h-full bg-[#0E131F] border border-[#1B2436] hover:border-[#1E3B5C] rounded-xl p-4 sm:p-6 flex flex-col justify-between transition-colors shadow-sm">
+        <Reveal direction="up" delay={200} className="h-full min-w-0">
+          <div className="h-full min-w-0 bg-surface-card rounded-xl p-5 sm:p-6 flex flex-col justify-between transition-colors">
             <div className="flex flex-col gap-3 sm:gap-3.5 mb-4 sm:mb-5">
               <div className="flex items-center justify-between">
-                <div className="w-8.5 sm:w-9 h-8.5 sm:h-9 rounded-lg bg-[#0A0E17] border border-[#1B2436] flex items-center justify-center">
-                  <IconHammer className="size-4.5 sm:size-5 text-[#F0F6FC]" />
+                <div className="w-8.5 sm:w-9 h-8.5 sm:h-9 rounded-lg bg-surface-subtle flex items-center justify-center">
+                  <IconHammer className="size-4.5 sm:size-5 text-text-primary" />
                 </div>
-                <span className="px-2 py-0.5 rounded-md bg-[#0A0E17] text-[#546682] text-[10px] font-mono font-medium tracking-wider uppercase">
-                  C++17 SOURCE
+                <span className="px-2 py-0.5 rounded-md bg-surface-subtle text-text-secondary text-[13px] tabular-nums font-medium">
+                  C++17 source
                 </span>
               </div>
-              <h3 className="text-base sm:text-lg font-bold text-[#F0F6FC]">Build from Source</h3>
-              <p className="text-[12.5px] sm:text-[13px] text-[#8B9BB4] leading-[1.55]">
+              <h3 className="text-base sm:text-lg font-bold text-text-primary">Build from Source</h3>
+              <p className="text-base text-text-secondary leading-[1.55]">
                 Compile in seconds with standard g++ or clang++. No external packages or third-party libraries.
               </p>
             </div>
 
-            <div className="relative bg-[#0B0E17] border border-[#1B2436] rounded-lg p-3 sm:p-3.5 font-mono text-[11px] sm:text-[11.5px] text-[#F0F6FC] flex flex-col gap-1.5 group">
-              <div className="text-[#F0F6FC]">git clone github.com/thekeny/kvllay</div>
-              <div className="text-[#F0F6FC]">cd kvllay &amp;&amp; make compile</div>
-              <div className="text-[#00D2FF] font-medium">./build/kvllay -p 6379</div>
+            <div className="relative bg-surface-subtle min-w-0 rounded-lg p-3 sm:p-3.5 font-mono text-[13px] text-text-primary flex flex-col gap-1.5 group overflow-x-auto">
+              <code className="block whitespace-pre text-text-primary pr-10">git clone github.com/thekeny/kvllay</code>
+              <code className="block whitespace-pre text-text-primary">cd kvllay &amp;&amp; make compile</code>
+              <code className="block whitespace-pre text-accent-cyan font-medium">./build/kvllay -p 6379</code>
               <button
                 type="button"
                 onClick={() => handleCopy(sourceCode, 3)}
-                className="absolute top-2.5 right-2.5 p-1.5 text-[#546682] hover:text-[#00D2FF] transition-colors focus:outline-none"
+                className="absolute top-1 right-1 p-1.5 text-text-secondary hover:text-accent-cyan transition-colors focus:outline-none"
                 title="Copy commands"
               >
-                {copiedCard === 3 ? <IconCheck className="size-4 text-[#00D2FF]" /> : <IconCopy className="size-4" />}
+                {copiedCard === 3 ? <IconCheck className="size-4 text-accent-cyan" /> : <IconCopy className="size-4" />}
               </button>
             </div>
           </div>

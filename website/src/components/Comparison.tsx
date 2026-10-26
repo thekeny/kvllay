@@ -1,11 +1,7 @@
 import { useState } from "react"
 import { IconDatabase, IconGauge, IconArrowsExchange, IconChevronLeft, IconChevronRight } from "@tabler/icons-react"
-import benchmarkSingleClient from "@docs/images/benchmark_single_client.png"
-import benchmarkMultithreaded from "@docs/images/benchmark_multithreaded.png"
-import benchmarkRam from "@docs/images/benchmark_ram.png"
-import benchmarkDocker from "@docs/images/benchmark_docker.png"
-import benchmarkLatency from "@docs/images/benchmark_latency.png"
 import { paths } from "@/config/paths"
+import { images } from "@/config/images"
 import { Reveal } from "@/components/ui/Reveal"
 
 export function Comparison() {
@@ -18,7 +14,7 @@ export function Comparison() {
       title: "Single-Client Throughput (SET, GET, INCR, MSET)",
       subtitle: "Single socket connection throughput — 100.5k ops/s GET (+20.1%), 98.5k ops/s INCR (+29.2%), and 86.5k ops/s MSET (+41.3% over Redis).",
       badge: "100.5k ops/s GET",
-      image: benchmarkSingleClient,
+      image: images.benchmarkSingleClient,
       stats: "Kvllay: 100.5k GET / 98.5k INCR / 95.1k SET • Redis 8.x: 83.8k GET / 76.2k INCR / 75.6k SET",
     },
     {
@@ -27,7 +23,7 @@ export function Comparison() {
       title: "Pipelined & Batch Throughput (P=32, P=64)",
       subtitle: "Batch pipelined throughput — up to 5.67M req/s GET (~5x over unpipelined Redis, +124% over Redis P=64) and 3.26M req/s SET (P=32).",
       badge: "5.67M req/s Peak",
-      image: benchmarkMultithreaded,
+      image: images.benchmarkMultithreaded,
       stats: "Kvllay: 5,665,723 req/s (P=64) / 3,257,329 req/s (SET P=32) • Redis 8.x: 2,531,645 req/s (P=64)",
     },
     {
@@ -36,7 +32,7 @@ export function Comparison() {
       title: "RAM Consumption (Idle & 50k Keys)",
       subtitle: "Resident set size (RSS) memory consumption measured via OS procfs under clean and populated states.",
       badge: "3.7x Lighter",
-      image: benchmarkRam,
+      image: images.benchmarkRam,
       stats: "Kvllay: 4.1 MB Idle (11.4 MB @ 50k keys) • Redis 8.x: 15.2 MB Idle (20.0 MB @ 50k keys)",
     },
     {
@@ -45,7 +41,7 @@ export function Comparison() {
       title: "Docker Scratch Container Footprint",
       subtitle: "Multi-stage scratch image size compared to official redis:alpine image.",
       badge: "87x Smaller",
-      image: benchmarkDocker,
+      image: images.benchmarkDocker,
       stats: "Kvllay Container: 1.6 MB • Redis Image: 140.0 MB",
     },
     {
@@ -54,7 +50,7 @@ export function Comparison() {
       title: "Sub-Millisecond Response Latency (p50)",
       subtitle: "50th percentile response time distribution — 10 μs single-client and 0.551 ms @ 5.67M RPS (5.3x lower latency than Redis).",
       badge: "10 μs Latency",
-      image: benchmarkLatency,
+      image: images.benchmarkLatency,
       stats: "Kvllay: 0.010 ms (10 μs) single / 0.551 ms (P=64) • Redis 8.x: 0.013 ms (13 μs) single / 2.951 ms (P=64)",
     },
   ]
@@ -185,17 +181,12 @@ export function Comparison() {
   ]
 
   return (
-    <section id={paths.sections.why} className="w-full flex flex-col items-center py-10 sm:py-16 px-4 sm:px-6 lg:px-10 max-w-[1240px] mx-auto scroll-mt-20">
+    <section id={paths.sections.why} className="w-full flex flex-col items-center py-8 sm:py-12 px-4 sm:px-6 lg:px-10 max-w-[1240px] mx-auto scroll-mt-20">
       <Reveal direction="up" className="w-full flex flex-col items-center text-center gap-2.5 sm:gap-3 mb-8 sm:mb-12">
-        <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[#00D2FF]/10 border border-[#00D2FF]/30">
-          <span className="text-[11px] font-mono font-bold text-[#00D2FF] tracking-wider uppercase">
-            HEAD-TO-HEAD BENCHMARK
-          </span>
-        </div>
-        <h2 className="text-2xl sm:text-3xl lg:text-[38px] font-bold text-[#F0F6FC] tracking-tight">
+        <h2 className="text-2xl sm:text-3xl lg:text-[38px] font-bold text-text-primary tracking-tight">
           Why Choose Kvllay Over Redis?
         </h2>
-        <p className="text-sm sm:text-base text-[#8B9BB4] max-w-[780px] leading-[1.6]">
+        <p className="text-base text-text-secondary max-w-[65ch] leading-[1.6]">
           Redis is great, but often overkill. Kvllay delivers exact RESP2 compatibility with a fraction of the overhead, making it 87x smaller, 3.7x lighter on RAM, up to 5x faster in throughput (5.49M req/s peak), and 4.2x lower latency than Redis.
         </p>
       </Reveal>
@@ -205,17 +196,17 @@ export function Comparison() {
           const Icon = item.icon
           return (
             <Reveal key={item.title} direction="up" delay={idx * 80} className="h-full">
-              <div className="h-full bg-[#0E131F] border border-[#1B2436] hover:border-[#1E3B5C] rounded-xl p-4 sm:p-6 flex flex-col justify-between gap-3.5 sm:gap-4 transition-colors shadow-sm">
+              <div className="h-full bg-surface-card rounded-xl p-5 sm:p-6 flex flex-col justify-between gap-3.5 sm:gap-4 transition-colors">
                 <div>
-                  <div className="w-9 sm:w-10 h-9 sm:h-10 rounded-xl bg-[#00D2FF]/10 flex items-center justify-center mb-3 sm:mb-4">
-                    <Icon className="size-4.5 sm:size-5 text-[#00D2FF]" />
+                  <div className="w-9 sm:w-10 h-9 sm:h-10 rounded-xl bg-accent-cyan/10 flex items-center justify-center mb-3 sm:mb-4">
+                    <Icon className="size-4.5 sm:size-5 text-accent-cyan" />
                   </div>
-                  <h3 className="text-base sm:text-lg font-bold text-[#F0F6FC] mb-1.5 sm:mb-2">{item.title}</h3>
-                  <p className="text-[13px] sm:text-[13.5px] text-[#8B9BB4] leading-[1.55]">{item.desc}</p>
+                  <h3 className="text-base sm:text-lg font-bold text-text-primary mb-1.5 sm:mb-2">{item.title}</h3>
+                  <p className="text-base text-text-secondary leading-[1.55]">{item.desc}</p>
                 </div>
-                <div className="flex items-center gap-2 px-2.5 sm:px-3 py-1.5 rounded-md bg-[#0A0E17] border border-[#1B2436] text-xs font-mono">
-                  <span className="text-[#00D2FF] font-bold">{item.badgeHighlight}</span>
-                  <span className="text-[#546682]">{item.badgeText}</span>
+                <div className="flex flex-wrap items-center gap-2 px-2.5 sm:px-3 py-1.5 rounded-md bg-surface-subtle text-[13px] tabular-nums">
+                  <span className="text-accent-cyan font-bold">{item.badgeHighlight}</span>
+                  <span className="text-text-secondary">{item.badgeText}</span>
                 </div>
               </div>
             </Reveal>
@@ -227,33 +218,33 @@ export function Comparison() {
         <div id={paths.sections.benchmarks} className="w-full flex flex-col gap-4 sm:gap-6">
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 sm:gap-4 pb-1 sm:pb-2">
             <div>
-              <h3 className="text-lg sm:text-2xl font-bold text-[#F0F6FC]">Visual Performance Graphs</h3>
-              <p className="text-xs sm:text-[13px] text-[#8B9BB4] mt-0.5">
+              <h3 className="text-lg sm:text-2xl font-bold text-text-primary">Visual Performance Graphs</h3>
+              <p className="text-[13px] text-text-secondary mt-0.5">
                 Official benchmark results against Redis 8.x (redis-benchmark & stress tests)
               </p>
             </div>
 
             <div className="flex items-center gap-4 sm:gap-5 w-full sm:w-auto justify-between sm:justify-end">
-              <div className="flex items-center gap-3 text-xs font-mono">
+              <div className="flex items-center gap-3 text-[13px] tabular-nums">
                 <div className="flex items-center gap-1.5">
-                  <span className="w-2.5 h-2.5 rounded-sm bg-[#00D2FF]" />
-                  <span className="text-[#F0F6FC]">kvllay</span>
+                  <span className="w-2.5 h-2.5 rounded-sm bg-accent-cyan" />
+                  <span className="text-text-primary">kvllay</span>
                 </div>
                 <div className="flex items-center gap-1.5">
                   <span className="w-2.5 h-2.5 rounded-sm bg-[#D53026]" />
-                  <span className="text-[#8B9BB4]">Redis 8.x</span>
+                  <span className="text-text-secondary">Redis 8.x</span>
                 </div>
               </div>
 
               <div className="flex items-center gap-2">
-                <span className="text-xs font-mono text-[#546682] mr-1">
-                  {String(activeSlide + 1).padStart(2, "0")} / {String(slides.length).padStart(2, "0")}
+                <span className="text-[13px] tabular-nums text-text-secondary mr-1">
+                  {activeSlide + 1} / {slides.length}
                 </span>
                 <button
                   type="button"
                   onClick={prevSlide}
                   aria-label="Previous Benchmark Chart"
-                  className="p-1.5 sm:p-2 rounded-lg bg-[#0E131F] border border-[#1B2436] hover:border-[#00D2FF]/50 text-[#8B9BB4] hover:text-[#00D2FF] transition-colors focus:outline-none"
+                  className="inline-flex size-11 items-center justify-center rounded-lg bg-surface-card text-text-secondary hover:text-accent-cyan transition-colors focus:outline-none"
                 >
                   <IconChevronLeft className="size-4" />
                 </button>
@@ -261,7 +252,7 @@ export function Comparison() {
                   type="button"
                   onClick={nextSlide}
                   aria-label="Next Benchmark Chart"
-                  className="p-1.5 sm:p-2 rounded-lg bg-[#0E131F] border border-[#1B2436] hover:border-[#00D2FF]/50 text-[#8B9BB4] hover:text-[#00D2FF] transition-colors focus:outline-none"
+                  className="inline-flex size-11 items-center justify-center rounded-lg bg-surface-card text-text-secondary hover:text-accent-cyan transition-colors focus:outline-none"
                 >
                   <IconChevronRight className="size-4" />
                 </button>
@@ -269,16 +260,17 @@ export function Comparison() {
             </div>
           </div>
 
-          <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-none">
+          <div className="flex flex-wrap items-center justify-center gap-2">
             {slides.map((slide, idx) => (
               <button
                 key={slide.id}
                 type="button"
                 onClick={() => setActiveSlide(idx)}
-                className={`px-3 py-1.5 rounded-lg text-xs font-mono font-medium transition-all whitespace-nowrap ${
+                aria-pressed={activeSlide === idx}
+                className={`inline-flex items-center justify-center px-3 py-1.5 rounded-lg text-[13px] tabular-nums font-medium transition-colors whitespace-nowrap ${
                   activeSlide === idx
-                    ? "bg-[#0E131F] text-[#00D2FF] border border-[#00D2FF]/60 shadow-sm"
-                    : "bg-[#0A0E17] text-[#8B9BB4] border border-[#1B2436] hover:text-[#F0F6FC]"
+                    ? "bg-accent-cyan text-primary-foreground"
+                    : "bg-surface-subtle text-text-secondary hover:text-text-primary"
                 }`}
               >
                 {slide.tabName}
@@ -289,15 +281,15 @@ export function Comparison() {
           <div className="w-full flex flex-col gap-3 sm:gap-4">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1.5 sm:gap-2">
               <div>
-                <h4 className="text-sm sm:text-lg font-bold text-[#F0F6FC]">
+                <h4 className="text-sm sm:text-lg font-bold text-text-primary">
                   {slides[activeSlide].title}
                 </h4>
-                <p className="text-[11.5px] sm:text-[13px] text-[#8B9BB4]">
+                <p className="text-[13px] text-text-secondary">
                   {slides[activeSlide].subtitle}
                 </p>
               </div>
               <div className="flex items-center gap-2">
-                <span className="px-2 sm:px-2.5 py-0.5 sm:py-1 rounded-full bg-[#00D2FF]/10 border border-[#00D2FF]/30 text-[11px] sm:text-xs font-mono font-bold text-[#00D2FF]">
+                <span className="px-2 sm:px-2.5 py-0.5 sm:py-1 rounded-full bg-accent-cyan/10 text-[13px] tabular-nums font-bold text-accent-cyan">
                   {slides[activeSlide].badge}
                 </span>
               </div>
@@ -307,26 +299,27 @@ export function Comparison() {
               <img
                 src={slides[activeSlide].image}
                 alt={slides[activeSlide].title}
-                className="max-h-[380px] sm:max-h-[480px] w-auto max-w-full object-contain transition-all duration-300"
+                className="max-h-[380px] sm:max-h-[480px] w-auto max-w-full object-contain transition-colors duration-300"
               />
             </div>
 
-            <div className="flex items-center justify-between gap-4 pt-1">
-              <span className="text-[11px] sm:text-xs font-mono text-[#546682] truncate">
+            <div className="flex flex-col items-center gap-3 pt-1">
+              <span className="text-center text-[13px] tabular-nums text-text-secondary min-w-0 whitespace-normal">
                 {slides[activeSlide].stats}
               </span>
 
-              <div className="flex items-center gap-1.5 shrink-0">
+              <div className="flex items-center gap-0 shrink-0">
                 {slides.map((_, idx) => (
                   <button
                     key={idx}
                     type="button"
                     onClick={() => setActiveSlide(idx)}
                     aria-label={`Jump to slide ${idx + 1}`}
-                    className={`h-1.5 rounded-full transition-all focus:outline-none ${
-                      activeSlide === idx ? "w-6 bg-[#00D2FF]" : "w-1.5 bg-[#1B2436] hover:bg-[#546682]"
-                    }`}
-                  />
+                    aria-pressed={activeSlide === idx}
+                    className="flex size-11 items-center justify-center rounded-lg hover:bg-surface-card transition-colors"
+                  >
+                    <span className={`h-1.5 rounded-full ${activeSlide === idx ? "w-6 bg-accent-cyan" : "w-1.5 bg-[#546682]"}`} />
+                  </button>
                 ))}
               </div>
             </div>
@@ -334,23 +327,23 @@ export function Comparison() {
         </div>
       </Reveal>
 
-      <Reveal direction="up" delay={100} className="w-full bg-[#0E131F] border border-[#1B2436] rounded-xl overflow-hidden shadow-sm">
+      <Reveal direction="up" delay={100} className="w-full bg-surface-card rounded-xl overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse min-w-[640px]">
             <thead>
-              <tr className="bg-[#0A0E17] border-b border-[#1B2436] text-[11px] sm:text-[12px] font-mono">
-                <th className="py-3 px-4 sm:py-3.5 sm:px-6 font-bold text-[#546682]">WORKLOAD / METRIC</th>
-                <th className="py-3 px-4 sm:py-3.5 sm:px-6 font-bold text-[#00D2FF]">KVLLAY V1.0.0</th>
-                <th className="py-3 px-4 sm:py-3.5 sm:px-6 font-bold text-[#8B9BB4]">REDIS 8.x</th>
-                <th className="py-3 px-4 sm:py-3.5 sm:px-6 font-bold text-[#546682]">COMPARISON RESULT</th>
+              <tr className="bg-surface-subtle text-[13px] tabular-nums">
+                <th className="py-3 px-4 sm:py-3.5 sm:px-6 font-bold text-text-secondary">WORKLOAD / METRIC</th>
+                <th className="py-3 px-4 sm:py-3.5 sm:px-6 font-bold text-accent-cyan">KVLLAY V1.0.0</th>
+                <th className="py-3 px-4 sm:py-3.5 sm:px-6 font-bold text-text-secondary">REDIS 8.x</th>
+                <th className="py-3 px-4 sm:py-3.5 sm:px-6 font-bold text-text-secondary">COMPARISON RESULT</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-[#1B2436] text-xs sm:text-[13px] font-mono">
+            <tbody className="text-[13px] tabular-nums">
               {tableData.map((row, idx) => (
-                <tr key={idx} className="hover:bg-[#121826] transition-colors">
-                  <td className="py-3 px-4 sm:py-3.5 sm:px-6 font-sans font-medium text-[#F0F6FC]">{row.metric}</td>
-                  <td className="py-3 px-4 sm:py-3.5 sm:px-6 font-bold text-[#00D2FF]">{row.kvllay}</td>
-                  <td className="py-3 px-4 sm:py-3.5 sm:px-6 text-[#8B9BB4]">{row.redis}</td>
+                <tr key={idx} className="even:bg-surface-subtle hover:bg-[#161D2E] transition-colors">
+                  <td className="py-3 px-4 sm:py-3.5 sm:px-6 font-sans font-medium text-text-primary">{row.metric}</td>
+                  <td className="py-3 px-4 sm:py-3.5 sm:px-6 font-bold text-accent-cyan">{row.kvllay}</td>
+                  <td className="py-3 px-4 sm:py-3.5 sm:px-6 text-text-secondary">{row.redis}</td>
                   <td className="py-3 px-4 sm:py-3.5 sm:px-6 text-[#10B981] font-semibold">{row.result}</td>
                 </tr>
               ))}

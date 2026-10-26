@@ -11,12 +11,6 @@ export const paths = {
   integrations: "#integrations",
   quickstart: "#quickstart",
   docs: "#docs",
-  assets: {
-    allayHeader: `${base}allay_header.webp`,
-    allayFly: `${base}allay_fly.webp`,
-    allayDocsWebp: `${base}allay_docs.webp`,
-    allayDocsGif: `${base}allay_docs.gif`,
-  },
   sections: {
     why: "why",
     benchmarks: "benchmarks",

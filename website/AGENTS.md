@@ -39,6 +39,7 @@ website/
 │   │       └── Reveal.tsx      # Scroll reveal wrapper with directions, delays, and GPU transitions
 │   ├── config/
 │   │   ├── links.ts            # Centralized external links and repository URLs
+│   │   ├── images.ts           # Centralized source asset URLs and public image URLs
 │   │   └── paths.ts            # Centralized internal paths, section IDs, and public asset URLs
 │   ├── lib/
 │   │   ├── useGithubStars.ts   # Hook for GitHub API star fetching, caching, and skeleton state
@@ -177,6 +178,8 @@ Static files placed in `website/public/` are served at the root URL:
 - `/allay_docs.webp` & `/allay_docs.gif`: Documentation card animation.
 - `/allay_fly.webp`: Flying Allay mascot for the bottom CTA banner.
 
+Image sources used by the website are collected in `src/config/images.ts`; import them from `@/config/images` instead of declaring image paths in components. Images in the repository root and `docs/images/` are resolved directly from their source files with Vite URL imports. Keep website-only assets in `website/public/`.
+
 Favicons in `index.html` resolve directly from the repository root:
 - `../logo.ico`
 - `../logo.png`
@@ -186,6 +189,10 @@ Favicons in `index.html` resolve directly from the repository root:
 
 ## Styling & Design Tokens
 
+- **Surface separation**: Use background tone and spacing. Do not add borders, divider lines, decorative rings, gradients, or resting shadows, including on hover and selected states. The hero mascot's subtle cyan glow and the `Redis-Compatible` text gradient are intentional user-requested exceptions.
+- **Interaction states**: Selected tabs use a cyan fill with dark text. Keyboard focus uses a contrasting light fill with dark text through the shared `:focus-visible` styles, without an outline or ring. Keep button targets at least 44×44 px.
+- **Responsive navigation**: The compact menu is used below 1024 px; desktop navigation and the resize handler must use the same breakpoint.
+- **Type scale**: Body descriptions are 16 px; secondary labels are at least 13 px. Reserve monospace for code and commands; use tabular numerals for changing metrics.
 - **Tailwind Version**: Tailwind CSS v4 loaded via `@import "tailwindcss";` in `src/index.css`.
 - **Theme Palette**:
   - Background primary: `#070A10`
