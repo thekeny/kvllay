@@ -5,6 +5,11 @@
   <p>In-memory key-value store</p>
 
   <p>
+    <a href="https://hub.docker.com/r/kenyka/kvllay"><img src="https://img.shields.io/badge/Docker%20Hub-2496ED?logo=docker&logoColor=white" alt="Docker Hub"></a>
+    <a href="https://github.com/thekeny/kvllay"><img src="https://img.shields.io/github/stars/thekeny/kvllay?logo=github&label=Give%20a%20star" alt="GitHub stars"></a>
+  </p>
+
+  <p>
     <a href="https://github.com/thekeny/kvllay/releases">Release</a> •
     <a href="https://github.com/thekeny/kvllay/blob/main/docs/ru.md">Русская документация</a> •
     <a href="https://github.com/thekeny/kvllay/blob/main/docs/en.md">English Documentation</a>
